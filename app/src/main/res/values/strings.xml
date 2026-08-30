@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">TaskPilot</string>
+    <string name="accessibility_service_label">TaskPilot UI automation</string>
+    <string name="accessibility_service_description">Allows TaskPilot to observe accessible Android UI and perform user-approved actions.</string>
+</resources>
