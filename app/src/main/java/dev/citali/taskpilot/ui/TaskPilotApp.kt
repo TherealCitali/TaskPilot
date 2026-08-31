@@ -1,6 +1,6 @@
 @file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 
-package com.thereal.taskpilot.ui
+package dev.citali.taskpilot.ui
 
 import android.content.ComponentName
 import android.content.Context
@@ -99,7 +99,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import com.thereal.taskpilot.accessibility.TaskPilotAccessibilityService
+import dev.citali.taskpilot.accessibility.TaskPilotAccessibilityService
 
 private enum class Destination(
     val label: String,

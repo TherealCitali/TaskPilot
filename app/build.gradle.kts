@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "com.thereal.taskpilot"
+    namespace = "dev.citali.taskpilot"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.thereal.taskpilot"
+        applicationId = "dev.citali.taskpilot"
         minSdk = 29
         targetSdk = 35
         versionCode = 1

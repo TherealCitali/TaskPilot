@@ -93,6 +93,33 @@ The user must be able to stop a task instantly. If an app exposes an unclear con
 
 Accessibility automation cannot guarantee control of every application. Android secure surfaces, custom-rendered controls, WebViews, and apps that restrict accessibility may limit what can be observed or operated.
 
+## Android identity
+
+- Namespace: `dev.citali.taskpilot`
+- Application ID: `dev.citali.taskpilot`
+- Minimum Android version: Android 10 / API 29
+- Target Android SDK: API 35
+
+## GitHub Actions
+
+The repository includes two workflows inspired by the automation patterns used in LunarTune:
+
+### Build APK (`.github/workflows/build-apk.yml`)
+
+Runs on every push/commit and can also be started manually from the Actions tab. It builds an installable debug APK with JDK 17 and uploads it as a workflow artifact named `TaskPilot-debug-<commit-sha>`.
+
+### Bump version (`.github/workflows/bump-version.yml`)
+
+Run this workflow manually from the Actions tab. Choose `patch`, `minor`, or `major`, or provide an exact semantic version such as `0.2.0`. The workflow will:
+
+1. Increment `versionCode` and update `versionName`.
+2. Commit the version change.
+3. Create and push a `v<version>` tag.
+4. Build and upload the versioned debug APK.
+5. Create a GitHub Release with the APK attached.
+
+The workflow currently publishes a debug-signed APK for development/testing. Production release signing should be added later with GitHub Secrets and a protected keystore.
+
 ## AI provider configuration
 
 The first version will support configurable OpenAI-compatible services. The user will be able to provide:

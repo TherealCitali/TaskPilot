@@ -1,4 +1,4 @@
-package com.thereal.taskpilot.ui.theme
+package dev.citali.taskpilot.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme

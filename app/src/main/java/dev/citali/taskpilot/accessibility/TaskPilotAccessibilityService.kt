@@ -1,4 +1,4 @@
-package com.thereal.taskpilot.accessibility
+package dev.citali.taskpilot.accessibility
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
