@@ -104,9 +104,16 @@ Accessibility automation cannot guarantee control of every application. Android 
 
 The repository includes two workflows inspired by the automation patterns used in LunarTune:
 
-### Build APK (`.github/workflows/build-apk.yml`)
+### Build signed APKs (`.github/workflows/build-apk.yml`)
 
-Runs on every push/commit and can also be started manually from the Actions tab. It builds an installable debug APK with JDK 17 and uploads it as a workflow artifact named `TaskPilot-debug-<commit-sha>`.
+Runs on every push/commit and can also be started manually from the Actions tab. It builds four signed release APKs with JDK 17:
+
+- `arm64-v8a`
+- `armeabi-v7a`
+- `x86`
+- `x86_64`
+
+No universal APK is produced. The four APKs and a `SHA256SUMS` file are uploaded as a workflow artifact named `TaskPilot-signed-<commit-sha>`.
 
 ### Bump version (`.github/workflows/bump-version.yml`)
 
@@ -115,10 +122,42 @@ Run this workflow manually from the Actions tab. Choose `patch`, `minor`, or `ma
 1. Increment `versionCode` and update `versionName`.
 2. Commit the version change.
 3. Create and push a `v<version>` tag.
-4. Build and upload the versioned debug APK.
-5. Create a GitHub Release with the APK attached.
+4. Build four signed, architecture-specific release APKs.
+5. Upload the APKs as an artifact.
+6. Create a GitHub Release with all four APKs attached.
 
-The workflow currently publishes a debug-signed APK for development/testing. Production release signing should be added later with GitHub Secrets and a protected keystore.
+### Signing setup
+
+The signing keystore must be created and kept by the project owner. Do not commit it or paste it into chat.
+
+Create a new release keystore locally, for example:
+
+```bash
+keytool -genkeypair -v \\
+  -keystore taskpilot-release.jks \\
+  -alias taskpilot \\
+  -keyalg RSA -keysize 4096 \\
+  -validity 10000
+```
+
+Convert it to one line of Base64 before adding it to GitHub Actions Secrets:
+
+```bash
+# Linux
+base64 -w 0 taskpilot-release.jks > taskpilot-release.jks.b64
+
+# macOS
+base64 taskpilot-release.jks | tr -d '\\n' > taskpilot-release.jks.b64
+```
+
+Add these repository secrets under **Settings → Secrets and variables → Actions**:
+
+- `TASKPILOT_KEYSTORE_BASE64` — contents of `taskpilot-release.jks.b64`
+- `TASKPILOT_KEYSTORE_PASSWORD` — keystore password
+- `TASKPILOT_KEY_ALIAS` — normally `taskpilot`
+- `TASKPILOT_KEY_PASSWORD` — key password
+
+The workflows decode the keystore only into the temporary GitHub runner directory. They do not store it in the repository. Keep a secure offline backup of the keystore; losing it prevents signing updates with the same identity.
 
 ## AI provider configuration
 

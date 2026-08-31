@@ -4,6 +4,17 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val taskPilotKeystoreFile = providers.environmentVariable("TASKPILOT_KEYSTORE_FILE").orNull
+val taskPilotKeystorePassword = providers.environmentVariable("TASKPILOT_KEYSTORE_PASSWORD").orNull
+val taskPilotKeyAlias = providers.environmentVariable("TASKPILOT_KEY_ALIAS").orNull
+val taskPilotKeyPassword = providers.environmentVariable("TASKPILOT_KEY_PASSWORD").orNull
+val hasTaskPilotSigning = listOf(
+    taskPilotKeystoreFile,
+    taskPilotKeystorePassword,
+    taskPilotKeyAlias,
+    taskPilotKeyPassword
+).all { !it.isNullOrBlank() }
+
 android {
     namespace = "dev.citali.taskpilot"
     compileSdk = 35
@@ -21,9 +32,32 @@ android {
         }
     }
 
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+            isUniversalApk = false
+        }
+    }
+
+    signingConfigs {
+        create("taskPilotRelease") {
+            if (hasTaskPilotSigning) {
+                storeFile = file(taskPilotKeystoreFile!!)
+                storePassword = taskPilotKeystorePassword
+                keyAlias = taskPilotKeyAlias
+                keyPassword = taskPilotKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (hasTaskPilotSigning) {
+                signingConfig = signingConfigs.getByName("taskPilotRelease")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

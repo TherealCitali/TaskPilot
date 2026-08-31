@@ -1,4 +1,4 @@
-name: Build APK
+name: Build signed APKs
 
 on:
   push: {}
@@ -13,9 +13,9 @@ concurrency:
 
 jobs:
   build:
-    name: Build debug APK
+    name: Build signed ABI APKs
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Check out source
@@ -31,16 +31,56 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Prepare release keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.TASKPILOT_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "$KEYSTORE_BASE64" || {
+            echo "TASKPILOT_KEYSTORE_BASE64 is not configured."
+            exit 1
+          }
+          mkdir -p "$RUNNER_TEMP/taskpilot-signing"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/taskpilot-signing/taskpilot-release.jks"
+          chmod 600 "$RUNNER_TEMP/taskpilot-signing/taskpilot-release.jks"
+
       - name: Grant execute permission for Gradle wrapper
         run: chmod +x ./gradlew
 
-      - name: Build debug APK
-        run: ./gradlew --no-daemon --stacktrace :app:assembleDebug
+      - name: Build signed release APKs
+        env:
+          TASKPILOT_KEYSTORE_FILE: ${{ runner.temp }}/taskpilot-signing/taskpilot-release.jks
+          TASKPILOT_KEYSTORE_PASSWORD: ${{ secrets.TASKPILOT_KEYSTORE_PASSWORD }}
+          TASKPILOT_KEY_ALIAS: ${{ secrets.TASKPILOT_KEY_ALIAS }}
+          TASKPILOT_KEY_PASSWORD: ${{ secrets.TASKPILOT_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon --stacktrace :app:assembleRelease
 
-      - name: Upload debug APK
+      - name: Collect architecture-specific APKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          output_dir="app/build/outputs/apk/release"
+          dist_dir="$RUNNER_TEMP/taskpilot-apks"
+          mkdir -p "$dist_dir"
+
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            apk="$(find "$output_dir" -maxdepth 1 -type f -name "*${abi}*.apk" | head -n 1 || true)"
+            if [ -z "$apk" ]; then
+              echo "Missing signed APK for ABI: $abi"
+              find "$output_dir" -maxdepth 1 -type f -print || true
+              exit 1
+            fi
+            cp "$apk" "$dist_dir/TaskPilot-${abi}-${GITHUB_SHA::7}.apk"
+          done
+
+          test "$(find "$dist_dir" -maxdepth 1 -type f -name '*.apk' | wc -l)" -eq 4
+          sha256sum "$dist_dir"/*.apk > "$dist_dir/SHA256SUMS"
+          find "$dist_dir" -maxdepth 1 -type f -printf '%f\n' | sort
+
+      - name: Upload signed APKs
         uses: actions/upload-artifact@v4
         with:
-          name: TaskPilot-debug-${{ github.sha }}
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: TaskPilot-signed-${{ github.sha }}
+          path: ${{ runner.temp }}/taskpilot-apks/*
           if-no-files-found: error
           retention-days: 14
