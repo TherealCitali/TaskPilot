@@ -27,15 +27,10 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/LICENSE-MIT-7762FF?style=for-the-badge" alt="MIT License" />
-  <img src="https://img.shields.io/badge/LANGUAGE-KOTLIN-7762FF?style=for-the-badge" alt="Kotlin" />
-  <img src="https://img.shields.io/badge/TOOLKIT-JETPACK_COMPOSE-7762FF?style=for-the-badge" alt="Jetpack Compose" />
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/DESIGN-MATERIAL_3_EXPRESSIVE-B6FF3B?style=for-the-badge&labelColor=20202B&color=7762FF" alt="Material 3 Expressive" />
-  <img src="https://img.shields.io/badge/PLATFORM-ANDROID_10%2B-B6FF3B?style=for-the-badge&labelColor=20202B&color=7762FF" alt="Android 10 or newer" />
-  <img src="https://img.shields.io/badge/BUILD-SIGNED_ABI_APKS-B6FF3B?style=for-the-badge&labelColor=20202B&color=7762FF" alt="Signed architecture-specific APKs" />
+  <img src="https://img.shields.io/badge/Design-Material_3-000000?style=for-the-badge&logo=material-design&color=6366f1&labelColor=1e1e2e" alt="Material Design 3" />
+  <img src="https://img.shields.io/github/license/TherealCitali/TaskPilot?style=for-the-badge&color=6366f1&labelColor=1e1e2e" alt="License" />
+  <img src="https://img.shields.io/badge/Language-Kotlin-7f52ff?style=for-the-badge&logo=kotlin&color=6366f1&labelColor=1e1e2e" alt="Kotlin Language" />
+ <img src="https://img.shields.io/badge/Toolkit-Jetpack_Compose-4285f4?style=for-the-badge&logo=jetpack-compose&color=6366f1&labelColor=1e1e2e" alt="Jetpack Compose Toolkit" />
 </p>
 
 ## ✦ What is TaskPilot?
