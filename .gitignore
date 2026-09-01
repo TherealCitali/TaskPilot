@@ -15,6 +15,7 @@ local.properties
 # Secrets and generated local data
 *.jks
 *.keystore
+/secret-backup/
 .env
 .env.*
 accessibility-dumps/
