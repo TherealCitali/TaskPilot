@@ -134,6 +134,19 @@ The interface should feel technical without feeling intimidating: a fast command
 - **UI toolkit:** Jetpack Compose
 - **Design system:** Material 3 Expressive patterns
 
+## ✦ CI pre-releases
+
+Every push runs `.github/workflows/build-apk.yml`. It builds four signed, architecture-specific APKs and uploads each one as a separate artifact:
+
+- `arm64-v8a`
+- `armeabi-v7a`
+- `x86`
+- `x86_64`
+
+The same workflow creates a unique GitHub **pre-release** containing those APKs and `SHA256SUMS` as separate release assets. Only the latest 10 CI pre-releases with `taskpilot-ci-*` tags are retained; older ones are removed automatically.
+
+The workflow uses GitHub's built-in `GITHUB_TOKEN` with `contents: write`, so a separate PAT is not required for release creation. The manual version-bump workflow creates normal versioned releases.
+
 ## ✦ Limitations
 
 AccessibilityService cannot control every application reliably. Secure screens, protected fields, custom-rendered controls, WebViews, and apps that restrict accessibility may limit what TaskPilot can observe or operate. In those cases, the correct behavior is to pause, explain the limitation, and let the user decide what to do next.
