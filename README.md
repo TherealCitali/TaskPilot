@@ -133,10 +133,10 @@ The signing keystore must be created and kept by the project owner. Do not commi
 Create a new release keystore locally, for example:
 
 ```bash
-keytool -genkeypair -v \\
-  -keystore taskpilot-release.jks \\
-  -alias taskpilot \\
-  -keyalg RSA -keysize 4096 \\
+keytool -genkeypair -v \
+  -keystore taskpilot-release.jks \
+  -alias taskpilot \
+  -keyalg RSA -keysize 4096 \
   -validity 10000
 ```
 
@@ -147,15 +147,17 @@ Convert it to one line of Base64 before adding it to GitHub Actions Secrets:
 base64 -w 0 taskpilot-release.jks > taskpilot-release.jks.b64
 
 # macOS
-base64 taskpilot-release.jks | tr -d '\\n' > taskpilot-release.jks.b64
+base64 taskpilot-release.jks | tr -d '\n' > taskpilot-release.jks.b64
 ```
 
-Add these repository secrets under **Settings → Secrets and variables → Actions**:
+The repository already contains the four compatible secrets used by the CI workflows:
 
-- `TASKPILOT_KEYSTORE_BASE64` — contents of `taskpilot-release.jks.b64`
-- `TASKPILOT_KEYSTORE_PASSWORD` — keystore password
-- `TASKPILOT_KEY_ALIAS` — normally `taskpilot`
-- `TASKPILOT_KEY_PASSWORD` — key password
+- `KEYSTORE` — Base64 contents of `taskpilot-release.jks`
+- `KEYSTORE_PASSWORD` — keystore password
+- `KEY_ALIAS` — normally `taskpilot`
+- `KEY_PASSWORD` — key password
+
+No new `TASKPILOT_*` aliases are required. GitHub does not allow workflows or API clients to read an existing secret value and copy it into another secret name, so reusing the existing names avoids exposing the keystore. If these secrets belong to another signing identity, replace them only after confirming that the identity is intended for TaskPilot.
 
 The workflows decode the keystore only into the temporary GitHub runner directory. They do not store it in the repository. Keep a secure offline backup of the keystore; losing it prevents signing updates with the same identity.
 

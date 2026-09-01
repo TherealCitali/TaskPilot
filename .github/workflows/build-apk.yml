@@ -33,11 +33,11 @@ jobs:
 
       - name: Prepare release keystore
         env:
-          KEYSTORE_BASE64: ${{ secrets.TASKPILOT_KEYSTORE_BASE64 }}
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE }}
         run: |
           set -euo pipefail
           test -n "$KEYSTORE_BASE64" || {
-            echo "TASKPILOT_KEYSTORE_BASE64 is not configured."
+            echo "KEYSTORE is not configured."
             exit 1
           }
           mkdir -p "$RUNNER_TEMP/taskpilot-signing"
@@ -50,9 +50,9 @@ jobs:
       - name: Build signed release APKs
         env:
           TASKPILOT_KEYSTORE_FILE: ${{ runner.temp }}/taskpilot-signing/taskpilot-release.jks
-          TASKPILOT_KEYSTORE_PASSWORD: ${{ secrets.TASKPILOT_KEYSTORE_PASSWORD }}
-          TASKPILOT_KEY_ALIAS: ${{ secrets.TASKPILOT_KEY_ALIAS }}
-          TASKPILOT_KEY_PASSWORD: ${{ secrets.TASKPILOT_KEY_PASSWORD }}
+          TASKPILOT_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          TASKPILOT_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          TASKPILOT_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew --no-daemon --stacktrace :app:assembleRelease
 
       - name: Collect architecture-specific APKs
