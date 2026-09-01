@@ -42,6 +42,7 @@ import androidx.compose.material.icons.outlined.AccessibilityNew
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.ChevronLeft
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.DeleteOutline
@@ -70,6 +71,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -111,6 +113,16 @@ private enum class Destination(
     SETTINGS("Settings", Icons.Filled.Settings, Icons.Filled.Settings)
 }
 
+private enum class SettingsPage(
+    val title: String,
+    val subtitle: String
+) {
+    ROOT("Settings", "TaskPilot · careful automation"),
+    SAFETY("Safety and permissions", "Control what TaskPilot is allowed to do"),
+    DEVELOPER("Developer options", "Inspect the agent while it is being built"),
+    ABOUT("About and diagnostics", "TaskPilot health and project details")
+}
+
 private data class PlanStep(
     val title: String,
     val detail: String,
@@ -123,6 +135,7 @@ fun TaskPilotApp() {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    var settingsPageIndex by rememberSaveable { mutableIntStateOf(0) }
     var command by rememberSaveable { mutableStateOf("") }
     var showPlan by rememberSaveable { mutableStateOf(false) }
     var isRunning by rememberSaveable { mutableStateOf(false) }
@@ -155,21 +168,32 @@ fun TaskPilotApp() {
     }
 
     val destination = Destination.values()[selectedTab.coerceIn(0, Destination.values().lastIndex)]
+    val settingsPage = SettingsPage.values()[settingsPageIndex.coerceIn(0, SettingsPage.values().lastIndex)]
+    val screenTitle = if (destination == Destination.SETTINGS) settingsPage.title else destination.label
+    val screenSubtitle = if (destination == Destination.SETTINGS) settingsPage.subtitle else "TaskPilot · careful automation"
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Column {
                         Text(
-                            text = destination.label,
+                            text = screenTitle,
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            text = "TaskPilot · careful automation",
+                            text = screenSubtitle,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+                },
+                navigationIcon = {
+                    if (destination == Destination.SETTINGS && settingsPage != SettingsPage.ROOT) {
+                        IconButton(onClick = { settingsPageIndex = SettingsPage.ROOT.ordinal }) {
+                            Icon(Icons.Outlined.ChevronLeft, contentDescription = "Back to settings")
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -185,7 +209,12 @@ fun TaskPilotApp() {
                 Destination.values().forEachIndexed { index, item ->
                     NavigationBarItem(
                         selected = selectedTab == index,
-                        onClick = { selectedTab = index },
+                        onClick = {
+                            selectedTab = index
+                            if (index != Destination.SETTINGS.ordinal) {
+                                settingsPageIndex = SettingsPage.ROOT.ordinal
+                            }
+                        },
                         icon = {
                             Icon(
                                 imageVector = if (selectedTab == index) item.selectedIcon else item.icon,
@@ -225,12 +254,21 @@ fun TaskPilotApp() {
             )
 
             Destination.HISTORY -> HistoryScreen(Modifier.padding(paddingValues))
-            Destination.SETTINGS -> SettingsScreen(
-                modifier = Modifier.padding(paddingValues),
-                onOpenAccessibility = {
-                    context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                }
-            )
+            Destination.SETTINGS -> when (settingsPage) {
+                SettingsPage.ROOT -> SettingsScreen(
+                    modifier = Modifier.padding(paddingValues),
+                    onOpenAccessibility = {
+                        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    },
+                    onOpenSafety = { settingsPageIndex = SettingsPage.SAFETY.ordinal },
+                    onOpenDeveloper = { settingsPageIndex = SettingsPage.DEVELOPER.ordinal },
+                    onOpenAbout = { settingsPageIndex = SettingsPage.ABOUT.ordinal }
+                )
+
+                SettingsPage.SAFETY -> SafetySettingsScreen(Modifier.padding(paddingValues))
+                SettingsPage.DEVELOPER -> DeveloperSettingsScreen(Modifier.padding(paddingValues))
+                SettingsPage.ABOUT -> AboutDiagnosticsScreen(Modifier.padding(paddingValues))
+            }
         }
     }
 
@@ -747,7 +785,13 @@ private fun HistoryScreen(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun SettingsScreen(modifier: Modifier = Modifier, onOpenAccessibility: () -> Unit) {
+private fun SettingsScreen(
+    modifier: Modifier = Modifier,
+    onOpenAccessibility: () -> Unit,
+    onOpenSafety: () -> Unit,
+    onOpenDeveloper: () -> Unit,
+    onOpenAbout: () -> Unit
+) {
     var endpoint by rememberSaveable { mutableStateOf("https://api.example.com/v1") }
     var model by rememberSaveable { mutableStateOf("your-model") }
     var apiKey by rememberSaveable { mutableStateOf("") }
@@ -816,16 +860,16 @@ private fun SettingsScreen(modifier: Modifier = Modifier, onOpenAccessibility: (
                 title = "Safety and permissions",
                 subtitle = "Manage risk confirmations, sensitive-field handling, and allowed actions.",
                 action = "Configure",
-                onClick = { }
+                onClick = onOpenSafety
             )
         }
         item {
             SettingsActionCard(
                 icon = Icons.Outlined.Code,
                 title = "Debug / Developer options",
-                subtitle = "Diagnostics will expose redacted tree summaries and action validation results.",
+                subtitle = "Open redacted tree summaries, overlay status, and action validation results.",
                 action = "Open",
-                onClick = { }
+                onClick = onOpenDeveloper
             )
         }
         item {
@@ -834,9 +878,241 @@ private fun SettingsScreen(modifier: Modifier = Modifier, onOpenAccessibility: (
                 title = "About and diagnostics",
                 subtitle = "TaskPilot 0.1.0 · native Android scaffold",
                 action = "View",
-                onClick = { }
+                onClick = onOpenAbout
             )
         }
+    }
+}
+
+@Composable
+private fun SafetySettingsScreen(modifier: Modifier = Modifier) {
+    var highRiskConfirmations by rememberSaveable { mutableStateOf(true) }
+    var redactSensitiveValues by rememberSaveable { mutableStateOf(true) }
+    var pauseOnAmbiguity by rememberSaveable { mutableStateOf(true) }
+
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        item {
+            SectionHeading(
+                "Safety defaults",
+                "TaskPilot pauses instead of guessing when a task could cause harm or confusion."
+            )
+        }
+        item {
+            SettingsToggleCard(
+                icon = Icons.Outlined.WarningAmber,
+                title = "Confirm high-risk actions",
+                subtitle = "Ask again before deletes, sends, purchases, permissions, and critical settings.",
+                checked = highRiskConfirmations,
+                onCheckedChange = { highRiskConfirmations = it }
+            )
+        }
+        item {
+            SettingsToggleCard(
+                icon = Icons.Outlined.Lock,
+                title = "Redact sensitive values",
+                subtitle = "Mask passwords, PINs, tokens, payment data, and likely personal identifiers before AI transmission.",
+                checked = redactSensitiveValues,
+                onCheckedChange = { redactSensitiveValues = it }
+            )
+        }
+        item {
+            SettingsToggleCard(
+                icon = Icons.Outlined.HelpOutline,
+                title = "Pause on ambiguity",
+                subtitle = "Stop and ask a question when the target, UI state, or intended action is not clear.",
+                checked = pauseOnAmbiguity,
+                onCheckedChange = { pauseOnAmbiguity = it }
+            )
+        }
+        item {
+            ElevatedCard(shape = MaterialTheme.shapes.large) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text("Always protected", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Passwords, OTPs, banking credentials, card details, UPI PINs, recovery codes, authentication tokens, and government IDs are never handled automatically.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    HorizontalDivider()
+                    Text(
+                        "A user decision can allow a one-time manual interaction, but the value remains outside AI context and persistent history.",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DeveloperSettingsScreen(modifier: Modifier = Modifier) {
+    var showTreeSummary by rememberSaveable { mutableStateOf(true) }
+    var showValidation by rememberSaveable { mutableStateOf(true) }
+    var showOverlayStatus by rememberSaveable { mutableStateOf(true) }
+
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        item {
+            SectionHeading(
+                "Diagnostics",
+                "Developer tools stay redacted and are intended for testing the agent safely."
+            )
+        }
+        item {
+            SettingsToggleCard(
+                icon = Icons.Outlined.Code,
+                title = "Show redacted tree summary",
+                subtitle = "Display node counts, package names, and safe selector metadata in the live log.",
+                checked = showTreeSummary,
+                onCheckedChange = { showTreeSummary = it }
+            )
+        }
+        item {
+            SettingsToggleCard(
+                icon = Icons.Filled.Security,
+                title = "Show action validation",
+                subtitle = "Explain why an action was accepted, paused, or rejected by the safety layer.",
+                checked = showValidation,
+                onCheckedChange = { showValidation = it }
+            )
+        }
+        item {
+            SettingsToggleCard(
+                icon = Icons.Outlined.ChatBubbleOutline,
+                title = "Show overlay status",
+                subtitle = "Keep the Stop control and agent-question status visible while a task is active.",
+                checked = showOverlayStatus,
+                onCheckedChange = { showOverlayStatus = it }
+            )
+        }
+        item {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                shape = MaterialTheme.shapes.large
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Icon(Icons.Outlined.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Text(
+                        "Raw accessibility text, screenshots, API keys, and sensitive task values are never written to diagnostics.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AboutDiagnosticsScreen(modifier: Modifier = Modifier) {
+    var diagnosticsRun by rememberSaveable { mutableStateOf(false) }
+
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        item {
+            ElevatedCard(
+                colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.62f)),
+                shape = MaterialTheme.shapes.extraLarge
+            ) {
+                Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("TaskPilot", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text("Careful automation for Android", color = MaterialTheme.colorScheme.onPrimaryContainer)
+                    Text("Version 0.1.0 · scaffold", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                }
+            }
+        }
+        item {
+            ElevatedCard(shape = MaterialTheme.shapes.large) {
+                Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp)) {
+                    DetailInfoRow("Application ID", "dev.citali.taskpilot")
+                    HorizontalDivider()
+                    DetailInfoRow("Android support", "Android 10+ · API 29")
+                    HorizontalDivider()
+                    DetailInfoRow("Build output", "4 signed ABI APKs")
+                    HorizontalDivider()
+                    DetailInfoRow("Execution model", "Observe · Think · Act")
+                }
+            }
+        }
+        item {
+            ElevatedCard(shape = MaterialTheme.shapes.large) {
+                Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Icon(Icons.Outlined.Bolt, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+                        Column {
+                            Text("Diagnostics", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                if (diagnosticsRun) "Basic local checks completed." else "Check local app configuration and service readiness.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Button(onClick = { diagnosticsRun = true }, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Outlined.Refresh, contentDescription = null)
+                        Spacer(Modifier.size(8.dp))
+                        Text(if (diagnosticsRun) "Run diagnostics again" else "Run diagnostics")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsToggleCard(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    ElevatedCard(shape = MaterialTheme.shapes.large) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(17.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(13.dp)
+        ) {
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(title, fontWeight = FontWeight.SemiBold)
+                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Switch(checked = checked, onCheckedChange = onCheckedChange)
+        }
+    }
+}
+
+@Composable
+private fun DetailInfoRow(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 14.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(0.9f))
+        Text(value, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1.1f))
     }
 }
 

@@ -59,28 +59,60 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          output_dir="app/build/outputs/apk/release"
+          output_root="app/build/outputs/apk"
           dist_dir="$RUNNER_TEMP/taskpilot-apks"
           mkdir -p "$dist_dir"
 
           for abi in arm64-v8a armeabi-v7a x86 x86_64; do
-            apk="$(find "$output_dir" -maxdepth 1 -type f -name "*${abi}*.apk" | head -n 1 || true)"
+            apk="$(find "$output_root" -type f -path '*/release/*.apk' -name "*${abi}*.apk" | head -n 1 || true)"
             if [ -z "$apk" ]; then
               echo "Missing signed APK for ABI: $abi"
-              find "$output_dir" -maxdepth 1 -type f -print || true
+              find "$output_root" -type f -print || true
               exit 1
             fi
-            cp "$apk" "$dist_dir/TaskPilot-${abi}-${GITHUB_SHA::7}.apk"
+            cp "$apk" "$dist_dir/TaskPilot-${abi}-${GITHUB_SHA}.apk"
           done
 
           test "$(find "$dist_dir" -maxdepth 1 -type f -name '*.apk' | wc -l)" -eq 4
           sha256sum "$dist_dir"/*.apk > "$dist_dir/SHA256SUMS"
           find "$dist_dir" -maxdepth 1 -type f -printf '%f\n' | sort
 
-      - name: Upload signed APKs
+      - name: Upload arm64-v8a APK
         uses: actions/upload-artifact@v4
         with:
-          name: TaskPilot-signed-${{ github.sha }}
-          path: ${{ runner.temp }}/taskpilot-apks/*
+          name: TaskPilot-arm64-v8a-${{ github.sha }}
+          path: ${{ runner.temp }}/taskpilot-apks/TaskPilot-arm64-v8a-${{ github.sha }}.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload armeabi-v7a APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TaskPilot-armeabi-v7a-${{ github.sha }}
+          path: ${{ runner.temp }}/taskpilot-apks/TaskPilot-armeabi-v7a-${{ github.sha }}.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload x86 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TaskPilot-x86-${{ github.sha }}
+          path: ${{ runner.temp }}/taskpilot-apks/TaskPilot-x86-${{ github.sha }}.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload x86_64 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TaskPilot-x86_64-${{ github.sha }}
+          path: ${{ runner.temp }}/taskpilot-apks/TaskPilot-x86_64-${{ github.sha }}.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: TaskPilot-checksums-${{ github.sha }}
+          path: ${{ runner.temp }}/taskpilot-apks/SHA256SUMS
           if-no-files-found: error
           retention-days: 14

@@ -113,7 +113,13 @@ Runs on every push/commit and can also be started manually from the Actions tab.
 - `x86`
 - `x86_64`
 
-No universal APK is produced. The four APKs and a `SHA256SUMS` file are uploaded as a workflow artifact named `TaskPilot-signed-<commit-sha>`.
+No universal APK is produced. Each APK is uploaded as its own GitHub Actions artifact, with a separate checksums artifact:
+
+- `TaskPilot-arm64-v8a-<commit-sha>`
+- `TaskPilot-armeabi-v7a-<commit-sha>`
+- `TaskPilot-x86-<commit-sha>`
+- `TaskPilot-x86_64-<commit-sha>`
+- `TaskPilot-checksums-<commit-sha>`
 
 ### Bump version (`.github/workflows/bump-version.yml`)
 
@@ -123,8 +129,8 @@ Run this workflow manually from the Actions tab. Choose `patch`, `minor`, or `ma
 2. Commit the version change.
 3. Create and push a `v<version>` tag.
 4. Build four signed, architecture-specific release APKs.
-5. Upload the APKs as an artifact.
-6. Create a GitHub Release with all four APKs attached.
+5. Upload each architecture APK as a separate artifact, plus a checksums artifact.
+6. Create a GitHub Release with all four APKs attached separately.
 
 ### Signing setup
 
