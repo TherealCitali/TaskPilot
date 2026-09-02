@@ -14,6 +14,7 @@ class DeterministicExecutor(private val intent: TaskIntent) {
     private var openMisses = 0
     private var typed = false
     private var submitted = false
+    private var submitRetries = 0
     private var searchOpened = false
     private var contactTyped = false
     private var conversationOpened = false
@@ -67,6 +68,11 @@ class DeterministicExecutor(private val intent: TaskIntent) {
 
         val editable = snapshot.editableNodes().firstOrNull()
         if (editable == null) {
+            // No text field yet. If we have already typed, the field closing is
+            // the normal sign that the search was submitted and results rendered.
+            if (typed && submitted) {
+                return Action.Complete("Searched ${intent.label} for \"${intent.query}\".")
+            }
             val searchControl = snapshot.firstByTextOrDescContaining("search", clickableOnly = true)
             return searchControl?.let { Action.Tap("#${it.id}", "Open the search field") }
                 ?: Action.AskUser("I can't find the search field in ${intent.label}. What should I do?")
@@ -79,7 +85,36 @@ class DeterministicExecutor(private val intent: TaskIntent) {
             submitted = true
             return Action.Key(Action.KeyAction.ENTER)
         }
+
+        // Submitted, but a text field is still on screen. Verify the query was
+        // actually committed instead of assuming success: an unsubmitted search
+        // box still holds the query and the results list never appears.
+        if (searchStillPending(snapshot, intent.query) && submitRetries < 2) {
+            submitRetries++
+            return Action.Key(Action.KeyAction.ENTER)
+        }
+        if (searchStillPending(snapshot, intent.query)) {
+            return Action.AskUser(
+                "I typed \"${intent.query}\" into ${intent.label} but could not submit it. " +
+                    "Press search yourself, then approve to continue."
+            )
+        }
         return Action.Complete("Searched ${intent.label} for \"${intent.query}\".")
+    }
+
+    /**
+     * True when the query still looks like it is sitting unsubmitted in the
+     * search box: the field retains the exact query and nothing that resembles a
+     * results list has appeared.
+     */
+    private fun searchStillPending(snapshot: UiSnapshot, query: String): Boolean {
+        if (query.isBlank()) return false
+        val fieldHoldsQuery = snapshot.editableNodes().any {
+            it.text?.trim().equals(query.trim(), ignoreCase = true)
+        }
+        if (!fieldHoldsQuery) return false
+        val hasResults = snapshot.root?.flatten()?.any { it.scrollable } == true
+        return !hasResults
     }
 
     private fun message(snapshot: UiSnapshot, intent: TaskIntent.MessageDraft): Action {

@@ -6,6 +6,7 @@ import android.accessibilityservice.GestureDescription
 import android.content.Intent
 import android.graphics.Path
 import android.graphics.Rect
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -147,6 +148,9 @@ class TaskPilotAccessibilityService : AccessibilityService() {
     private fun typeInto(target: String, text: String): Boolean {
         val node = resolveNode(target) ?: return false
         if (!node.isEditable) return false
+        // Focus first: many apps only wire up their IME action (and their search
+        // suggestions) once the field actually has input focus.
+        if (!node.isFocused) node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
         val arguments = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
         }
@@ -161,30 +165,64 @@ class TaskPilotAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Best-effort submit: find a clickable control labelled as the enter/search key,
-     * first in the app window and then in the soft-keyboard (IME) window, and tap it.
+     * Submit the current text field.
+     *
+     * Order matters. The previous implementation scanned the *app* window first
+     * for anything labelled "search", which in most apps matches the search box
+     * itself (for example YouTube's `search_edit_text`). Tapping that just
+     * re-focuses the field, so the query was typed and never submitted while the
+     * action still reported success.
+     *
+     * Now: ask the IME to submit via the focused editable node (the only reliable
+     * path), then the on-screen keyboard's own action key, and only then a real
+     * submit button in the app -- explicitly never the text field we typed into.
      */
     private fun imeEnter(): Boolean {
-        val labels = listOf("search", "go", "enter", "done", "send", "submit", "next")
-        fun matches(info: AccessibilityNodeInfo): Boolean {
-            if (!info.isClickable) return false
-            val text = info.text?.toString()?.trim().orEmpty()
-            val desc = info.contentDescription?.toString()?.trim().orEmpty()
-            val resId = info.viewIdResourceName?.substringAfterLast('/').orEmpty()
-            return labels.any { text.equals(it, ignoreCase = true) || desc.equals(it, ignoreCase = true) } ||
-                labels.any { resId.contains(it, ignoreCase = true) }
+        val focused = focusedEditable()
+
+        // 1. The correct API: tell the IME to perform its editor action.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && focused != null) {
+            if (focused.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)) return true
         }
-        for ((info, _) in SnapshotBuilder.walkDfs(currentRoot())) {
-            if (matches(info)) return clickNode(info, long = false)
-        }
+
+        // 2. The soft keyboard's action key (labelled Search / Go / Enter / Done).
+        val keyLabels = listOf("search", "go", "enter", "done", "send", "submit", "next")
         for (window in windows) {
-            if (window.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) {
-                for ((info, _) in SnapshotBuilder.walkDfs(window.root)) {
-                    if (matches(info)) return clickNode(info, long = false)
+            if (window.type != AccessibilityWindowInfo.TYPE_INPUT_METHOD) continue
+            for ((info, _) in SnapshotBuilder.walkDfs(window.root)) {
+                if (!info.isClickable) continue
+                val text = info.text?.toString()?.trim().orEmpty()
+                val desc = info.contentDescription?.toString()?.trim().orEmpty()
+                if (keyLabels.any { text.equals(it, true) || desc.equals(it, true) }) {
+                    if (clickNode(info, long = false)) return true
                 }
             }
         }
+
+        // 3. A genuine submit control in the app -- never an editable field, and
+        //    never the node we just typed into.
+        val focusedId = focused?.viewIdResourceName
+        for ((info, _) in SnapshotBuilder.walkDfs(currentRoot())) {
+            if (!info.isClickable || info.isEditable) continue
+            if (focusedId != null && info.viewIdResourceName == focusedId) continue
+            val text = info.text?.toString()?.trim().orEmpty()
+            val desc = info.contentDescription?.toString()?.trim().orEmpty()
+            val submitLabels = listOf("search", "go", "submit", "done")
+            if (submitLabels.any { text.equals(it, true) || desc.equals(it, true) }) {
+                if (clickNode(info, long = false)) return true
+            }
+        }
         return false
+    }
+
+    /** The editable node that currently has input focus, if any. */
+    private fun focusedEditable(): AccessibilityNodeInfo? {
+        currentRoot()?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            ?.takeIf { it.isEditable }?.let { return it }
+        return SnapshotBuilder.walkDfs(currentRoot())
+            .firstOrNull { (info, _) -> info.isEditable && info.isFocused }?.first
+            ?: SnapshotBuilder.walkDfs(currentRoot())
+                .firstOrNull { (info, _) -> info.isEditable }?.first
     }
 
     private fun launchApp(packageName: String): Boolean {

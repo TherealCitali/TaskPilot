@@ -300,7 +300,7 @@ object AgentEngine {
                 }
 
                 if (settings.showOverlay) {
-                    service.updateOverlay(description.take(40))
+                    service.updateOverlay(shortStatus(action))
                 }
                 delay(850)
             }
@@ -371,6 +371,25 @@ object AgentEngine {
         is Action.AskUser -> "Ask: ${action.question.take(60)}"
         is Action.Complete -> "Complete: ${action.summary.take(60)}"
         is Action.Fail -> "Fail: ${action.reason.take(60)}"
+    }
+
+    /** Very short label for the floating pill, which must stay narrow. */
+    private fun shortStatus(action: Action): String = when (action) {
+        is Action.Tap -> "Tapping"
+        is Action.LongPress -> "Holding"
+        is Action.Swipe -> "Swiping"
+        is Action.Type -> "Typing"
+        is Action.Key -> when (action.key) {
+            Action.KeyAction.ENTER -> "Submitting"
+            Action.KeyAction.BACK -> "Going back"
+            Action.KeyAction.HOME -> "Home"
+            Action.KeyAction.RECENTS -> "Recents"
+        }
+        is Action.OpenApp -> "Opening ${action.label.ifBlank { "app" }}"
+        is Action.Wait -> "Waiting"
+        is Action.AskUser -> "Needs you"
+        is Action.Complete -> "Done"
+        is Action.Fail -> "Stopped"
     }
 
     private fun actionKey(action: Action): String = when (action) {

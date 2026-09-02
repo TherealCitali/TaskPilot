@@ -6,10 +6,13 @@ import android.graphics.PixelFormat
 import android.os.Build
 import android.view.Gravity
 import android.view.WindowManager
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -146,38 +149,40 @@ class TaskPilotOverlay(private val service: AccessibilityService) :
 @Composable
 private fun OverlayContent(statusState: State<String>, onStop: () -> Unit) {
     val status by statusState
+    // The overlay floats over whatever app the task is driving, so it stays a
+    // compact pill: capped width, single line, and a small icon-only Stop.
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.96f),
         shape = RoundedCornerShape(50),
-        shadowElevation = 8.dp,
+        shadowElevation = 6.dp,
+        modifier = Modifier.widthIn(max = 260.dp),
     ) {
         Row(
-            modifier = Modifier
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.96f), RoundedCornerShape(50))
-                .padding(start = 16.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+            modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                text = "TaskPilot · $status",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
+                text = status,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
             )
             Surface(
                 onClick = onStop,
                 color = MaterialTheme.colorScheme.error,
                 contentColor = MaterialTheme.colorScheme.onError,
-                shape = RoundedCornerShape(50),
+                shape = CircleShape,
+                modifier = Modifier.size(30.dp),
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Icon(Icons.Filled.Close, contentDescription = null)
-                    Text("Stop", fontWeight = FontWeight.Bold)
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = "Stop the running task",
+                        modifier = Modifier.size(17.dp),
+                    )
                 }
             }
         }
