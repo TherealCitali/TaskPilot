@@ -6,6 +6,7 @@ import dev.citali.taskpilot.data.HistoryStore
 import dev.citali.taskpilot.data.SecureStore
 import dev.citali.taskpilot.data.SettingsStore
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -55,7 +56,21 @@ object AgentEngine {
     private val _state = MutableStateFlow(EngineState())
     val state: StateFlow<EngineState> = _state
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    /**
+     * Last-resort net. The loop already handles its own failures, but anything
+     * that escapes a coroutine on this scope would otherwise reach the default
+     * uncaught handler and kill the process mid-task. Surface it as a failed
+     * run instead.
+     */
+    private val crashGuard = CoroutineExceptionHandler { _, error ->
+        if (error is CancellationException) return@CoroutineExceptionHandler
+        runCatching {
+            log(LogLevel.ERROR, "Unexpected error: ${error.message ?: error::class.java.simpleName}")
+            finish(Phase.FAILED, "TaskPilot stopped after an unexpected error.")
+        }
+    }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + crashGuard)
     private var job: Job? = null
 
     @Volatile
@@ -154,7 +169,13 @@ object AgentEngine {
                     return
                 }
 
-                val snapshot = service.captureSnapshot(settings.redactSensitiveValues)
+                val snapshot = runCatching { service.captureSnapshot(settings.redactSensitiveValues) }
+                    .onFailure { log(LogLevel.WARN, "Could not read the screen; retrying.") }
+                    .getOrNull()
+                if (snapshot == null) {
+                    delay(600)
+                    continue
+                }
                 if (settings.showTreeSummary) {
                     log(
                         LogLevel.INFO,
@@ -239,7 +260,9 @@ object AgentEngine {
                 val description = describeAction(action)
                 log(LogLevel.ACTION, description)
                 recent.add(description)
-                val ok = service.execute(action)
+                val ok = runCatching { service.execute(action) }
+                    .onFailure { log(LogLevel.WARN, "Action threw: ${it.message}") }
+                    .getOrDefault(false)
                 if (!ok) {
                     consecutiveFailures++
                     log(LogLevel.WARN, "Action did not succeed ($consecutiveFailures/5).")

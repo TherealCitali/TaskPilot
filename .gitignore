@@ -24,3 +24,9 @@ accessibility-dumps/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Local SDK location
+local.properties
+
+# Kotlin build session files
+.kotlin/
