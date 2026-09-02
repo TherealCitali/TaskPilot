@@ -76,6 +76,8 @@ object AgentEngine {
     @Volatile
     private var paused = false
 
+    private var aiFailures = 0
+
     private var pendingQuestion: CompletableDeferred<QuestionAnswer>? = null
 
     fun isActive(): Boolean = job?.isActive == true
@@ -83,6 +85,7 @@ object AgentEngine {
     fun start(context: Context, plan: Plan) {
         if (isActive()) cancelJob()
         paused = false
+        aiFailures = 0
         pendingQuestion = null
         _state.value = EngineState(
             phase = Phase.RUNNING,
@@ -324,11 +327,15 @@ object AgentEngine {
         deterministic: DeterministicExecutor,
     ): Action {
         val apiKey = SecureStore.getApiKey(context)
-        if (!apiKey.isNullOrBlank() && settings.endpointUrl.isNotBlank() && settings.model.isNotBlank()) {
+        val aiConfigured = !apiKey.isNullOrBlank() &&
+            settings.endpointUrl.isNotBlank() &&
+            settings.model.isNotBlank()
+
+        if (aiConfigured) {
             val result = LlmClient.complete(
                 settings.endpointUrl,
                 settings.model,
-                apiKey,
+                apiKey!!,
                 listOf(
                     LlmClient.systemPrompt(),
                     LlmClient.userPrompt(plan.command, plan.steps, snapshot.toPromptString(), recent),
@@ -338,11 +345,37 @@ object AgentEngine {
                 val snippet = raw.trim().replace('\n', ' ').take(160)
                 log(LogLevel.MODEL, "Model: $snippet")
                 val action = LlmClient.parseAction(raw)
-                if (action != null) return action
-                log(LogLevel.WARN, "Model reply could not be parsed; using built-in executor.")
+                if (action != null) {
+                    aiFailures = 0
+                    return action
+                }
+                aiFailures++
+                log(LogLevel.WARN, "Model reply could not be parsed (attempt $aiFailures/3).")
             }.onFailure { error ->
-                log(LogLevel.WARN, "AI provider error: ${error.message}")
+                aiFailures++
+                log(LogLevel.ERROR, "AI provider error (attempt $aiFailures/3): ${error.message}")
             }
+
+            // The AI is the engine for open-ended tasks. Rather than quietly
+            // dropping to the offline executor -- which made a broken provider
+            // look like a working app that only understood the examples -- stop
+            // and say what went wrong.
+            if (aiFailures >= 3) {
+                return Action.Fail(
+                    "The AI provider is not responding correctly after 3 attempts. " +
+                        "Check the base URL, model name, and API key in Settings."
+                )
+            }
+            return Action.Wait(700)
+        }
+
+        // No provider configured. The built-in executor only covers a few known
+        // routines, so be explicit rather than appearing to fail at random.
+        if (plan.intent is TaskIntent.Generic) {
+            return Action.Fail(
+                "This task needs an AI provider. Add an OpenAI-compatible base URL, " +
+                    "model, and API key in Settings, then run it again."
+            )
         }
         return deterministic.next(snapshot)
     }
