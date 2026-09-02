@@ -22,15 +22,16 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsBottomHeight
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Pause
@@ -43,7 +44,6 @@ import androidx.compose.material.icons.outlined.AccessibilityNew
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.ChevronLeft
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.DeleteOutline
@@ -55,7 +55,6 @@ import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
@@ -77,17 +76,16 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -96,7 +94,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -104,36 +101,40 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.citali.taskpilot.R
 import dev.citali.taskpilot.accessibility.TaskPilotAccessibilityService
+import dev.citali.taskpilot.agent.AgentEngine
+import dev.citali.taskpilot.agent.CommandPlanner
+import dev.citali.taskpilot.agent.Plan
+import dev.citali.taskpilot.agent.PlanStep
+import dev.citali.taskpilot.data.HistoryEntry
+import dev.citali.taskpilot.data.HistoryStore
+import dev.citali.taskpilot.data.SecureStore
+import dev.citali.taskpilot.data.SettingsStore
+import dev.citali.taskpilot.data.TaskPilotSettings
+import kotlinx.coroutines.launch
+import java.text.DateFormat
+import java.util.Date
 
 private enum class Destination(
     val label: String,
     val icon: ImageVector,
-    val selectedIcon: ImageVector
 ) {
-    HOME("Home", Icons.Filled.Home, Icons.Filled.Home),
-    HISTORY("History", Icons.Filled.History, Icons.Filled.History),
-    SETTINGS("Settings", Icons.Filled.Settings, Icons.Filled.Settings)
+    HOME("Home", Icons.Filled.Home),
+    HISTORY("History", Icons.Filled.History),
+    SETTINGS("Settings", Icons.Filled.Settings)
 }
 
 private enum class SettingsPage(
     val title: String,
-    val subtitle: String
 ) {
-    ROOT("Settings", "TaskPilot · careful automation"),
-    SAFETY("Safety and permissions", "Control what TaskPilot is allowed to do"),
-    DEVELOPER("Developer options", "Inspect the agent while it is being built"),
-    ABOUT("About and diagnostics", "TaskPilot health and project details")
+    ROOT("Settings"),
+    SAFETY("Safety and permissions"),
+    DEVELOPER("Developer options"),
+    ABOUT("About and diagnostics")
 }
 
-private data class PlanStep(
-    val title: String,
-    val detail: String,
-    val highRisk: Boolean = false
-)
-
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TaskPilotApp() {
     val context = LocalContext.current
@@ -141,11 +142,12 @@ fun TaskPilotApp() {
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var settingsPageIndex by rememberSaveable { mutableIntStateOf(0) }
     var command by rememberSaveable { mutableStateOf("") }
-    var showPlan by rememberSaveable { mutableStateOf(false) }
-    var isRunning by rememberSaveable { mutableStateOf(false) }
+    var pendingPlan by remember { mutableStateOf<Plan?>(null) }
     var serviceEnabled by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
-    var showQuestion by rememberSaveable { mutableStateOf(false) }
-    var questionAnswer by rememberSaveable { mutableStateOf("") }
+
+    val engineState by AgentEngine.state.collectAsState()
+    val settings by SettingsStore.settings(context).collectAsState(initial = TaskPilotSettings())
+    val history by HistoryStore.entries(context).collectAsState(initial = emptyList())
 
     DisposableEffect(lifecycleOwner, context) {
         val observer = LifecycleEventObserver { _, event ->
@@ -157,14 +159,24 @@ fun TaskPilotApp() {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    if (showPlan) {
+    // Engine-driven question (high-risk confirmation or open question).
+    val question = engineState.question
+    if (question != null) {
+        QuestionDialog(
+            question = question,
+            onApprove = { text -> AgentEngine.answer(true, text) },
+            onDecline = { AgentEngine.answer(false) },
+        )
+    }
+
+    pendingPlan?.let { plan ->
         PlanPreviewScreen(
-            command = command,
-            onBack = { showPlan = false },
-            onEdit = { showPlan = false },
+            plan = plan,
+            onBack = { pendingPlan = null },
+            onEdit = { pendingPlan = null },
             onApprove = {
-                showPlan = false
-                isRunning = true
+                pendingPlan = null
+                AgentEngine.start(context, plan)
                 selectedTab = 0
             }
         )
@@ -173,8 +185,11 @@ fun TaskPilotApp() {
 
     val destination = Destination.values()[selectedTab.coerceIn(0, Destination.values().lastIndex)]
     val settingsPage = SettingsPage.values()[settingsPageIndex.coerceIn(0, SettingsPage.values().lastIndex)]
-    val screenTitle = if (destination == Destination.SETTINGS) settingsPage.title else destination.label
-    val screenSubtitle = if (destination == Destination.SETTINGS) settingsPage.subtitle else "TaskPilot · careful automation"
+    val isRunning = engineState.phase in setOf(
+        AgentEngine.Phase.RUNNING,
+        AgentEngine.Phase.WAITING_FOR_USER,
+        AgentEngine.Phase.PAUSED,
+    )
 
     Scaffold(
         topBar = {
@@ -182,154 +197,112 @@ fun TaskPilotApp() {
                 title = {
                     Column {
                         Text(
-                            text = screenTitle,
-                            style = MaterialTheme.typography.titleLarge,
+                            if (destination == Destination.SETTINGS) settingsPage.title else destination.label,
                             fontWeight = FontWeight.SemiBold
                         )
-                        Text(
-                            text = screenSubtitle,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                },
-                navigationIcon = {
-                    if (destination == Destination.SETTINGS && settingsPage != SettingsPage.ROOT) {
-                        IconButton(onClick = { settingsPageIndex = SettingsPage.ROOT.ordinal }) {
-                            Icon(Icons.Outlined.ChevronLeft, contentDescription = "Back to settings")
+                        if (destination == Destination.SETTINGS && settingsPageIndex != SettingsPage.ROOT.ordinal) {
+                            Text(
+                                "TaskPilot · careful automation",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
-                )
+                navigationIcon = {
+                    if (destination == Destination.SETTINGS && settingsPageIndex != SettingsPage.ROOT.ordinal) {
+                        IconButton(onClick = { settingsPageIndex = 0 }) {
+                            Text("‹", style = MaterialTheme.typography.headlineMedium)
+                        }
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
             )
         },
         bottomBar = {
-            NavigationBar(
-                containerColor = MaterialTheme.colorScheme.surface,
-                tonalElevation = 0.dp
-            ) {
-                Destination.values().forEachIndexed { index, item ->
+            NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+                Destination.values().forEachIndexed { index, dest ->
                     NavigationBarItem(
                         selected = selectedTab == index,
-                        onClick = {
-                            selectedTab = index
-                            if (index != Destination.SETTINGS.ordinal) {
-                                settingsPageIndex = SettingsPage.ROOT.ordinal
-                            }
-                        },
-                        icon = {
-                            Icon(
-                                imageVector = if (selectedTab == index) item.selectedIcon else item.icon,
-                                contentDescription = item.label
-                            )
-                        },
-                        label = { Text(item.label) }
+                        onClick = { selectedTab = index; settingsPageIndex = 0 },
+                        icon = { Icon(dest.icon, contentDescription = dest.label) },
+                        label = { Text(dest.label) }
                     )
                 }
-            }
-        },
-        floatingActionButton = {
-            if (isRunning) {
-                ExtendedFloatingActionButton(
-                    onClick = { isRunning = false },
-                    icon = { Icon(Icons.Filled.Stop, contentDescription = null) },
-                    text = { Text("Stop task") },
-                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer
-                )
             }
         },
         containerColor = MaterialTheme.colorScheme.background
     ) { paddingValues ->
-        when (destination) {
-            Destination.HOME -> HomeScreen(
-                modifier = Modifier.padding(paddingValues),
-                command = command,
-                onCommandChange = { command = it },
-                onCreatePlan = { showPlan = true },
-                onOpenAccessibility = {
-                    context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                },
-                serviceEnabled = serviceEnabled,
-                isRunning = isRunning,
-                onAskQuestion = { showQuestion = true }
-            )
-
-            Destination.HISTORY -> HistoryScreen(Modifier.padding(paddingValues))
-            Destination.SETTINGS -> when (settingsPage) {
-                SettingsPage.ROOT -> SettingsScreen(
-                    modifier = Modifier.padding(paddingValues),
-                    onOpenAccessibility = {
-                        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        Box(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
+            when (destination) {
+                Destination.HOME -> HomeScreen(
+                    command = command,
+                    onCommandChange = { command = it },
+                    onCreatePlan = {
+                        val text = command.trim()
+                        if (text.isNotBlank()) pendingPlan = CommandPlanner.parse(text)
                     },
-                    onOpenSafety = { settingsPageIndex = SettingsPage.SAFETY.ordinal },
-                    onOpenDeveloper = { settingsPageIndex = SettingsPage.DEVELOPER.ordinal },
-                    onOpenAbout = { settingsPageIndex = SettingsPage.ABOUT.ordinal }
+                    onOpenAccessibility = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
+                    serviceEnabled = serviceEnabled,
+                    engineState = engineState,
+                    onPause = { AgentEngine.pause() },
+                    onResume = { AgentEngine.resume() },
+                    onStop = { AgentEngine.stop() },
                 )
-
-                SettingsPage.SAFETY -> SafetySettingsScreen(Modifier.padding(paddingValues))
-                SettingsPage.DEVELOPER -> DeveloperSettingsScreen(Modifier.padding(paddingValues))
-                SettingsPage.ABOUT -> AboutDiagnosticsScreen(Modifier.padding(paddingValues))
+                Destination.HISTORY -> HistoryScreen(entries = history)
+                Destination.SETTINGS -> when (settingsPage) {
+                    SettingsPage.ROOT -> SettingsScreen(
+                        settings = settings,
+                        onOpenAccessibility = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
+                        onOpenSafety = { settingsPageIndex = SettingsPage.SAFETY.ordinal },
+                        onOpenDeveloper = { settingsPageIndex = SettingsPage.DEVELOPER.ordinal },
+                        onOpenAbout = { settingsPageIndex = SettingsPage.ABOUT.ordinal },
+                    )
+                    SettingsPage.SAFETY -> SafetySettingsScreen(settings = settings)
+                    SettingsPage.DEVELOPER -> DeveloperSettingsScreen(
+                        settings = settings,
+                        serviceEnabled = serviceEnabled,
+                    )
+                    SettingsPage.ABOUT -> AboutDiagnosticsScreen(serviceEnabled = serviceEnabled)
+                }
             }
         }
     }
-
-    if (showQuestion) {
-        AlertDialog(
-            onDismissRequest = { showQuestion = false },
-            title = { Text("TaskPilot needs an answer") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        text = "The live question overlay will appear here when the agent needs clarification.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    OutlinedTextField(
-                        value = questionAnswer,
-                        onValueChange = { questionAnswer = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Your answer") },
-                        minLines = 2
-                    )
-                }
-            },
-            confirmButton = {
-                Button(onClick = { showQuestion = false }) { Text("Continue") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showQuestion = false }) { Text("Cancel task") }
-            }
-        )
-    }
 }
+
+// ---------------------------------------------------------------------------
+// Home
+// ---------------------------------------------------------------------------
 
 @Composable
 private fun HomeScreen(
-    modifier: Modifier = Modifier,
     command: String,
     onCommandChange: (String) -> Unit,
     onCreatePlan: () -> Unit,
     onOpenAccessibility: () -> Unit,
     serviceEnabled: Boolean,
-    isRunning: Boolean,
-    onAskQuestion: () -> Unit
+    engineState: AgentEngine.EngineState,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onStop: () -> Unit,
 ) {
     val examples = listOf(
         "Open YouTube and search for Minecraft tutorials.",
         "Open Chrome and search Kotlin Coroutines guide.",
-        "Compose a WhatsApp message to John, but do not send it."
+        "Compose a WhatsApp message to John saying I'll be there in 10 minutes, but do not send it."
+    )
+    val isRunning = engineState.phase in setOf(
+        AgentEngine.Phase.RUNNING,
+        AgentEngine.Phase.WAITING_FOR_USER,
+        AgentEngine.Phase.PAUSED,
     )
 
     LazyColumn(
-        modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 112.dp),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        item {
-            WelcomeHeader()
-        }
+        item { WelcomeHeader() }
         item {
             ServiceCard(
                 enabled = serviceEnabled,
@@ -341,13 +314,19 @@ private fun HomeScreen(
                 command = command,
                 onCommandChange = onCommandChange,
                 onCreatePlan = onCreatePlan,
-                enabled = serviceEnabled
+                enabled = serviceEnabled && !isRunning
             )
         }
         if (isRunning) {
             item {
-                RunningTaskCard(onAskQuestion = onAskQuestion)
+                RunningTaskCard(
+                    engineState = engineState,
+                    onPause = onPause,
+                    onResume = onResume,
+                    onStop = onStop,
+                )
             }
+            item { LiveLogCard(engineState) }
         }
         item {
             SectionHeading(
@@ -356,14 +335,9 @@ private fun HomeScreen(
             )
         }
         items(examples) { example ->
-            ExampleRow(
-                text = example,
-                onClick = { onCommandChange(example) }
-            )
+            ExampleRow(text = example, onClick = { onCommandChange(example) })
         }
-        item {
-            PrivacyCallout()
-        }
+        item { PrivacyCallout() }
     }
 }
 
@@ -532,7 +506,14 @@ private fun CommandCard(
 }
 
 @Composable
-private fun RunningTaskCard(onAskQuestion: () -> Unit) {
+private fun RunningTaskCard(
+    engineState: AgentEngine.EngineState,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onStop: () -> Unit,
+) {
+    val paused = engineState.phase == AgentEngine.Phase.PAUSED
+    val waiting = engineState.phase == AgentEngine.Phase.WAITING_FOR_USER
     ElevatedCard(
         colors = CardDefaults.elevatedCardColors(
             containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.62f)
@@ -547,25 +528,96 @@ private fun RunningTaskCard(onAskQuestion: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Icon(Icons.Filled.PlayArrow, contentDescription = null)
+                Icon(
+                    imageVector = if (paused) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                    contentDescription = null
+                )
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Task is running", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text(
-                        "Observe → think → act → observe",
+                        if (paused) "Paused" else if (waiting) "Waiting for your decision" else "Task is running",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        engineState.statusText,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
-                Icon(Icons.Filled.Pause, contentDescription = "Paused between actions")
             }
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-            OutlinedButton(onClick = onAskQuestion) {
-                Icon(Icons.Outlined.ChatBubbleOutline, contentDescription = null)
-                Spacer(Modifier.size(8.dp))
-                Text("Open task question")
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(
+                    onClick = if (paused) onResume else onPause,
+                    enabled = !waiting
+                ) {
+                    Icon(
+                        imageVector = if (paused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.size(8.dp))
+                    Text(if (paused) "Resume" else "Pause")
+                }
+                Button(onClick = onStop) {
+                    Icon(Icons.Filled.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.size(8.dp))
+                    Text("Stop")
+                }
             }
         }
     }
+}
+
+@Composable
+private fun LiveLogCard(engineState: AgentEngine.EngineState) {
+    ElevatedCard(
+        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = MaterialTheme.shapes.large
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Code, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.size(8.dp))
+                Text("Live log", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            }
+            val entries = engineState.log.takeLast(14)
+            if (entries.isEmpty()) {
+                Text(
+                    "Actions will appear here as they run.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                entries.forEach { entry ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            time(entry.timeMillis),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            entry.message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = logColor(entry.level),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun logColor(level: AgentEngine.LogLevel): Color = when (level) {
+    AgentEngine.LogLevel.ERROR -> MaterialTheme.colorScheme.error
+    AgentEngine.LogLevel.WARN -> MaterialTheme.colorScheme.tertiary
+    AgentEngine.LogLevel.ACTION -> MaterialTheme.colorScheme.primary
+    AgentEngine.LogLevel.MODEL -> MaterialTheme.colorScheme.secondary
+    AgentEngine.LogLevel.INFO -> MaterialTheme.colorScheme.onSurfaceVariant
 }
 
 @Composable
@@ -621,14 +673,17 @@ private fun PrivacyCallout() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Plan preview
+// ---------------------------------------------------------------------------
+
 @Composable
 private fun PlanPreviewScreen(
-    command: String,
+    plan: Plan,
     onBack: () -> Unit,
     onEdit: () -> Unit,
-    onApprove: () -> Unit
+    onApprove: () -> Unit,
 ) {
-    val steps = remember(command) { planFor(command) }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -689,14 +744,14 @@ private fun PlanPreviewScreen(
                 ) {
                     Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Your command", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-                        Text(command, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Text(plan.command, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
             item {
                 SectionHeading("Proposed steps", "One validated action will run at a time.")
             }
-            items(steps) { step ->
+            items(plan.steps) { step ->
                 PlanStepRow(step)
             }
             item {
@@ -770,39 +825,120 @@ private fun PlanStepRow(step: PlanStep) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// History
+// ---------------------------------------------------------------------------
+
 @Composable
-private fun HistoryScreen(modifier: Modifier = Modifier) {
-    Box(modifier = modifier.fillMaxSize().padding(20.dp), contentAlignment = Alignment.Center) {
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(54.dp), tint = MaterialTheme.colorScheme.primary)
-            Text("No tasks yet", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Text(
-                "Approved tasks and redacted chat history will appear here.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+private fun HistoryScreen(entries: List<HistoryEntry>) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    if (entries.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize().padding(20.dp), contentAlignment = Alignment.Center) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(54.dp), tint = MaterialTheme.colorScheme.primary)
+                Text("No tasks yet", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                Text(
+                    "Approved tasks and their redacted outcomes will appear here.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        return
+    }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                SectionHeading("Recent tasks", "Newest first.")
+                TextButton(onClick = { scope.launch { HistoryStore.clear(context) } }) {
+                    Icon(Icons.Outlined.DeleteOutline, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.size(4.dp))
+                    Text("Clear")
+                }
+            }
+        }
+        items(entries) { entry ->
+            ElevatedCard(
+                colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                shape = MaterialTheme.shapes.medium
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            entry.command,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        StatusChip(entry.status)
+                    }
+                    Text(
+                        time(entry.completedAtMillis),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
         }
     }
 }
 
 @Composable
+private fun StatusChip(status: String) {
+    val (container, content) = when (status) {
+        "completed" -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
+        "failed", "blocked" -> MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
+        else -> MaterialTheme.colorScheme.surfaceVariant to MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Surface(color = container, contentColor = content, shape = RoundedCornerShape(50)) {
+        Text(
+            status,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+@Composable
 private fun SettingsScreen(
-    modifier: Modifier = Modifier,
+    settings: TaskPilotSettings,
     onOpenAccessibility: () -> Unit,
     onOpenSafety: () -> Unit,
     onOpenDeveloper: () -> Unit,
-    onOpenAbout: () -> Unit
+    onOpenAbout: () -> Unit,
 ) {
-    var endpoint by rememberSaveable { mutableStateOf("https://api.example.com/v1") }
-    var model by rememberSaveable { mutableStateOf("your-model") }
-    var apiKey by rememberSaveable { mutableStateOf("") }
-    var saved by rememberSaveable { mutableStateOf(false) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var endpoint by remember(settings.endpointUrl) { mutableStateOf(settings.endpointUrl) }
+    var model by remember(settings.model) { mutableStateOf(settings.model) }
+    var apiKey by remember { mutableStateOf("") }
+    var hasKey by remember { mutableStateOf(SecureStore.hasApiKey(context)) }
+    var saved by remember { mutableStateOf(false) }
 
     LazyColumn(
-        modifier = modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
@@ -831,18 +967,32 @@ private fun SettingsScreen(
                         onValueChange = { apiKey = it; saved = false },
                         modifier = Modifier.fillMaxWidth(),
                         label = { Text("API key") },
-                        placeholder = { Text("Stored securely on device") },
+                        placeholder = { Text(if (hasKey) "Stored (Keystore-encrypted). Enter a new key to replace it." else "Stored securely on device") },
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
                     )
-                    Button(onClick = { saved = true }, modifier = Modifier.fillMaxWidth()) {
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                SettingsStore.setProvider(context, endpoint, model)
+                                if (apiKey.isNotBlank()) {
+                                    SecureStore.saveApiKey(context, apiKey.trim())
+                                    apiKey = ""
+                                    hasKey = true
+                                }
+                                saved = true
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
                         Icon(Icons.Filled.Security, contentDescription = null)
                         Spacer(Modifier.size(8.dp))
                         Text(if (saved) "Settings saved locally" else "Save provider settings")
                     }
                     Text(
-                        "The secure Keystore-backed storage layer is part of the next implementation step. Never commit this key.",
+                        if (hasKey) "API key is stored on device, encrypted with a Keystore-backed key. It is never committed to Git or included in AI context as a field value."
+                        else "No API key saved yet. Without one, TaskPilot uses its built-in deterministic executor.",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -880,7 +1030,7 @@ private fun SettingsScreen(
             SettingsActionCard(
                 icon = Icons.Outlined.Info,
                 title = "About and diagnostics",
-                subtitle = "TaskPilot 0.1.0 · native Android scaffold",
+                subtitle = "TaskPilot 0.2.0 · agent connected",
                 action = "View",
                 onClick = onOpenAbout
             )
@@ -889,13 +1039,12 @@ private fun SettingsScreen(
 }
 
 @Composable
-private fun SafetySettingsScreen(modifier: Modifier = Modifier) {
-    var highRiskConfirmations by rememberSaveable { mutableStateOf(true) }
-    var redactSensitiveValues by rememberSaveable { mutableStateOf(true) }
-    var pauseOnAmbiguity by rememberSaveable { mutableStateOf(true) }
+private fun SafetySettingsScreen(settings: TaskPilotSettings) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     LazyColumn(
-        modifier = modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
@@ -910,8 +1059,8 @@ private fun SafetySettingsScreen(modifier: Modifier = Modifier) {
                 icon = Icons.Outlined.WarningAmber,
                 title = "Confirm high-risk actions",
                 subtitle = "Ask again before deletes, sends, purchases, permissions, and critical settings.",
-                checked = highRiskConfirmations,
-                onCheckedChange = { highRiskConfirmations = it }
+                checked = settings.highRiskConfirmations,
+                onCheckedChange = { scope.launch { SettingsStore.setHighRiskConfirmations(context, it) } }
             )
         }
         item {
@@ -919,8 +1068,8 @@ private fun SafetySettingsScreen(modifier: Modifier = Modifier) {
                 icon = Icons.Outlined.Lock,
                 title = "Redact sensitive values",
                 subtitle = "Mask passwords, PINs, tokens, payment data, and likely personal identifiers before AI transmission.",
-                checked = redactSensitiveValues,
-                onCheckedChange = { redactSensitiveValues = it }
+                checked = settings.redactSensitiveValues,
+                onCheckedChange = { scope.launch { SettingsStore.setRedactSensitiveValues(context, it) } }
             )
         }
         item {
@@ -928,8 +1077,8 @@ private fun SafetySettingsScreen(modifier: Modifier = Modifier) {
                 icon = Icons.Outlined.HelpOutline,
                 title = "Pause on ambiguity",
                 subtitle = "Stop and ask a question when the target, UI state, or intended action is not clear.",
-                checked = pauseOnAmbiguity,
-                onCheckedChange = { pauseOnAmbiguity = it }
+                checked = settings.pauseOnAmbiguity,
+                onCheckedChange = { scope.launch { SettingsStore.setPauseOnAmbiguity(context, it) } }
             )
         }
         item {
@@ -957,13 +1106,15 @@ private fun SafetySettingsScreen(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun DeveloperSettingsScreen(modifier: Modifier = Modifier) {
-    var showTreeSummary by rememberSaveable { mutableStateOf(true) }
-    var showValidation by rememberSaveable { mutableStateOf(true) }
-    var showOverlayStatus by rememberSaveable { mutableStateOf(true) }
+private fun DeveloperSettingsScreen(
+    settings: TaskPilotSettings,
+    serviceEnabled: Boolean,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     LazyColumn(
-        modifier = modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
@@ -977,9 +1128,9 @@ private fun DeveloperSettingsScreen(modifier: Modifier = Modifier) {
             SettingsToggleCard(
                 icon = Icons.Outlined.Code,
                 title = "Show redacted tree summary",
-                subtitle = "Display node counts, package names, and safe selector metadata in the live log.",
-                checked = showTreeSummary,
-                onCheckedChange = { showTreeSummary = it }
+                subtitle = "Display node counts and package names in the live log.",
+                checked = settings.showTreeSummary,
+                onCheckedChange = { scope.launch { SettingsStore.setShowTreeSummary(context, it) } }
             )
         }
         item {
@@ -987,18 +1138,41 @@ private fun DeveloperSettingsScreen(modifier: Modifier = Modifier) {
                 icon = Icons.Filled.Security,
                 title = "Show action validation",
                 subtitle = "Explain why an action was accepted, paused, or rejected by the safety layer.",
-                checked = showValidation,
-                onCheckedChange = { showValidation = it }
+                checked = settings.showValidation,
+                onCheckedChange = { scope.launch { SettingsStore.setShowValidation(context, it) } }
             )
         }
         item {
             SettingsToggleCard(
                 icon = Icons.Outlined.ChatBubbleOutline,
-                title = "Show overlay status",
-                subtitle = "Keep the Stop control and agent-question status visible while a task is active.",
-                checked = showOverlayStatus,
-                onCheckedChange = { showOverlayStatus = it }
+                title = "Show floating Stop control",
+                subtitle = "Keep the overlay visible while a task is active.",
+                checked = settings.showOverlay,
+                onCheckedChange = { scope.launch { SettingsStore.setShowOverlay(context, it) } }
             )
+        }
+        item {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                shape = MaterialTheme.shapes.large
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Icon(
+                        if (serviceEnabled) Icons.Filled.CheckCircle else Icons.Outlined.WarningAmber,
+                        contentDescription = null,
+                        tint = if (serviceEnabled) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error
+                    )
+                    Text(
+                        if (serviceEnabled) "Accessibility service is connected; redacted snapshots are available."
+                        else "Accessibility service is not connected — enable it to observe UI.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
         }
         item {
             Surface(
@@ -1022,11 +1196,12 @@ private fun DeveloperSettingsScreen(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun AboutDiagnosticsScreen(modifier: Modifier = Modifier) {
+private fun AboutDiagnosticsScreen(serviceEnabled: Boolean) {
+    val context = LocalContext.current
     var diagnosticsRun by rememberSaveable { mutableStateOf(false) }
 
     LazyColumn(
-        modifier = modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
@@ -1038,7 +1213,7 @@ private fun AboutDiagnosticsScreen(modifier: Modifier = Modifier) {
                 Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("TaskPilot", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                     Text("Careful automation for Android", color = MaterialTheme.colorScheme.onPrimaryContainer)
-                    Text("Version 0.1.0 · scaffold", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                    Text("Version 0.2.0 · agent connected", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
                 }
             }
         }
@@ -1051,7 +1226,7 @@ private fun AboutDiagnosticsScreen(modifier: Modifier = Modifier) {
                     HorizontalDivider()
                     DetailInfoRow("Build output", "4 signed ABI APKs")
                     HorizontalDivider()
-                    DetailInfoRow("Execution model", "Observe · Think · Act")
+                    DetailInfoRow("Execution model", "Observe · Think · Validate · Act")
                 }
             }
         }
@@ -1063,7 +1238,7 @@ private fun AboutDiagnosticsScreen(modifier: Modifier = Modifier) {
                         Column {
                             Text("Diagnostics", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                             Text(
-                                if (diagnosticsRun) "Basic local checks completed." else "Check local app configuration and service readiness.",
+                                "Check local app configuration and service readiness.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1074,9 +1249,38 @@ private fun AboutDiagnosticsScreen(modifier: Modifier = Modifier) {
                         Spacer(Modifier.size(8.dp))
                         Text(if (diagnosticsRun) "Run diagnostics again" else "Run diagnostics")
                     }
+                    if (diagnosticsRun) {
+                        HorizontalDivider()
+                        CheckRow("Accessibility service", serviceEnabled)
+                        CheckRow("API key stored (Keystore)", SecureStore.hasApiKey(context))
+                        CheckRow("Overlay available", serviceEnabled)
+                        CheckRow("History store", true)
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun CheckRow(label: String, ok: Boolean) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Icon(
+            imageVector = if (ok) Icons.Filled.CheckCircle else Icons.Outlined.WarningAmber,
+            contentDescription = null,
+            tint = if (ok) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(20.dp)
+        )
+        Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+        Text(
+            if (ok) "OK" else "Not ready",
+            style = MaterialTheme.typography.labelMedium,
+            color = if (ok) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error
+        )
     }
 }
 
@@ -1144,46 +1348,53 @@ private fun SettingsActionCard(
     }
 }
 
-private fun planFor(command: String): List<PlanStep> {
-    val normalized = command.lowercase()
-    return when {
-        "youtube" in normalized -> listOf(
-            PlanStep("Open YouTube", "Launch the installed YouTube application."),
-            PlanStep("Find search", "Locate the accessible search control."),
-            PlanStep("Search", "Enter the requested query in the search field."),
-            PlanStep("Verify results", "Confirm that the search results are visible.")
-        )
-        "chrome" in normalized -> listOf(
-            PlanStep("Open Chrome", "Launch the installed Chrome application."),
-            PlanStep("Focus the address bar", "Locate the accessible address or search field."),
-            PlanStep("Search", "Enter the requested query and submit it."),
-            PlanStep("Verify page", "Confirm that the search results page loaded.")
-        )
-        "whatsapp" in normalized -> listOf(
-            PlanStep("Open WhatsApp", "Launch WhatsApp and locate the requested contact."),
-            PlanStep("Open the conversation", "Find the conversation with the named person."),
-            PlanStep("Draft the message", "Type the requested ordinary text into the message field."),
-            PlanStep("Do not send", "Leave the message as a draft; no send action will be attempted.")
-        )
-        "gallery" in normalized || "screenshot" in normalized -> listOf(
-            PlanStep("Open Gallery", "Launch the available Gallery application."),
-            PlanStep("Find screenshots", "Identify screenshots matching the requested age filter."),
-            PlanStep("Review matches", "Show the matched items and verify the deletion scope."),
-            PlanStep("Delete matched items", "Delete only after an additional confirmation.", highRisk = true)
-        )
-        "battery saver" in normalized -> listOf(
-            PlanStep("Open Settings", "Launch Android Settings."),
-            PlanStep("Find Battery Saver", "Locate the Battery Saver setting."),
-            PlanStep("Enable Battery Saver", "Change the setting after the approved plan.")
-        )
-        else -> listOf(
-            PlanStep("Identify the destination", "Determine which installed app or Android surface matches the request."),
-            PlanStep("Observe the current UI", "Build a redacted accessibility-tree snapshot."),
-            PlanStep("Complete the requested task", "Continue one validated action at a time."),
-            PlanStep("Verify completion", "Confirm the requested outcome or ask a follow-up question.")
-        )
-    }
+// ---------------------------------------------------------------------------
+// Question dialog (engine-driven)
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun QuestionDialog(
+    question: AgentEngine.Question,
+    onApprove: (String?) -> Unit,
+    onDecline: () -> Unit,
+) {
+    var answerText by remember(question) { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDecline,
+        title = {
+            Text(if (question.highRisk) "Confirmation required" else "TaskPilot needs an answer")
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = question.text,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (!question.highRisk) {
+                    OutlinedTextField(
+                        value = answerText,
+                        onValueChange = { answerText = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Your answer") },
+                        minLines = 2
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onApprove(answerText.takeIf { it.isNotBlank() }) }) {
+                Text(if (question.highRisk) "Approve" else "Continue")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDecline) { Text(if (question.highRisk) "Decline" else "Cancel task") }
+        }
+    )
 }
+
+// ---------------------------------------------------------------------------
+// Utilities
+// ---------------------------------------------------------------------------
 
 private fun isAccessibilityServiceEnabled(context: Context): Boolean {
     val enabledServices = Settings.Secure.getString(
@@ -1193,3 +1404,6 @@ private fun isAccessibilityServiceEnabled(context: Context): Boolean {
     val expected = ComponentName(context, TaskPilotAccessibilityService::class.java).flattenToString()
     return enabledServices.split(':').any { it.equals(expected, ignoreCase = true) }
 }
+
+private fun time(millis: Long): String =
+    DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(millis))
