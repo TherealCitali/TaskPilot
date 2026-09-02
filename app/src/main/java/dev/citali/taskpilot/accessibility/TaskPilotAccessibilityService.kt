@@ -220,17 +220,28 @@ class TaskPilotAccessibilityService : AccessibilityService() {
 
     // ---- Floating Stop control -------------------------------------------
 
-    fun showOverlay(status: String) {
+    /**
+     * The overlay is a convenience, never a requirement. Every entry point is
+     * guarded and marshalled onto the main thread so a windowing failure can
+     * degrade to "no floating Stop button" instead of taking down the task.
+     */
+    fun showOverlay(status: String) = onMain {
         if (overlay == null) overlay = TaskPilotOverlay(this)
         overlay?.show(status)
     }
 
-    fun updateOverlay(status: String) {
+    fun updateOverlay(status: String) = onMain {
         overlay?.update(status)
     }
 
-    fun hideOverlay() {
+    fun hideOverlay() = onMain {
         overlay?.hide()
         overlay = null
+    }
+
+    private inline fun onMain(crossinline block: () -> Unit) {
+        val guarded = Runnable { runCatching { block() } }
+        if (Looper.myLooper() == Looper.getMainLooper()) guarded.run()
+        else mainHandler.post(guarded)
     }
 }
