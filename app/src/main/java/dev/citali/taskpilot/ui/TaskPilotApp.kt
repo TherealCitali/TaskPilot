@@ -144,6 +144,7 @@ fun TaskPilotApp() {
     var command by rememberSaveable { mutableStateOf("") }
     var pendingPlan by remember { mutableStateOf<Plan?>(null) }
     var serviceEnabled by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
+    var aiAvailable by remember { mutableStateOf(SecureStore.hasApiKey(context)) }
 
     val engineState by AgentEngine.state.collectAsState()
     val settings by SettingsStore.settings(context).collectAsState(initial = TaskPilotSettings())
@@ -153,6 +154,7 @@ fun TaskPilotApp() {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 serviceEnabled = isAccessibilityServiceEnabled(context)
+                aiAvailable = SecureStore.hasApiKey(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -236,11 +238,16 @@ fun TaskPilotApp() {
         Box(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
             when (destination) {
                 Destination.HOME -> HomeScreen(
+                    aiAvailable = aiAvailable,
+                    onOpenSettings = { selectedTab = Destination.SETTINGS.ordinal; settingsPageIndex = 0 },
                     command = command,
                     onCommandChange = { command = it },
                     onCreatePlan = {
                         val text = command.trim()
-                        if (text.isNotBlank()) pendingPlan = CommandPlanner.parse(text)
+                        if (text.isNotBlank()) {
+                            aiAvailable = SecureStore.hasApiKey(context)
+                            pendingPlan = CommandPlanner.parse(text, aiAvailable)
+                        }
                     },
                     onOpenAccessibility = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
                     serviceEnabled = serviceEnabled,
@@ -276,6 +283,8 @@ fun TaskPilotApp() {
 
 @Composable
 private fun HomeScreen(
+    aiAvailable: Boolean,
+    onOpenSettings: () -> Unit,
     command: String,
     onCommandChange: (String) -> Unit,
     onCreatePlan: () -> Unit,
@@ -309,6 +318,7 @@ private fun HomeScreen(
                 onOpenAccessibility = onOpenAccessibility
             )
         }
+        item { AiProviderCard(aiAvailable = aiAvailable, onOpenSettings = onOpenSettings) }
         item {
             CommandCard(
                 command = command,
@@ -338,6 +348,54 @@ private fun HomeScreen(
             ExampleRow(text = example, onClick = { onCommandChange(example) })
         }
         item { PrivacyCallout() }
+    }
+}
+
+/**
+ * Makes the online/offline distinction explicit. Without a provider TaskPilot can
+ * only run its few built-in routines, which previously looked like "the app only
+ * understands the examples".
+ */
+@Composable
+private fun AiProviderCard(aiAvailable: Boolean, onOpenSettings: () -> Unit) {
+    ElevatedCard(
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = if (aiAvailable) {
+                MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+            } else {
+                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f)
+            }
+        ),
+        shape = MaterialTheme.shapes.large
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(
+                imageVector = if (aiAvailable) Icons.Rounded.AutoAwesome else Icons.Outlined.Info,
+                contentDescription = null
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    if (aiAvailable) "AI provider connected" else "No AI provider",
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    if (aiAvailable) {
+                        "TaskPilot can follow your own instructions."
+                    } else {
+                        "Only the built-in example routines will run. Add a key to use your own commands."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (!aiAvailable) {
+                TextButton(onClick = onOpenSettings) { Text("Add key") }
+            }
+        }
     }
 }
 
@@ -936,6 +994,7 @@ private fun SettingsScreen(
     var apiKey by remember { mutableStateOf("") }
     var hasKey by remember { mutableStateOf(SecureStore.hasApiKey(context)) }
     var saved by remember { mutableStateOf(false) }
+    var keyError by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -977,10 +1036,18 @@ private fun SettingsScreen(
                             scope.launch {
                                 SettingsStore.setProvider(context, endpoint, model)
                                 if (apiKey.isNotBlank()) {
-                                    SecureStore.saveApiKey(context, apiKey.trim())
-                                    apiKey = ""
-                                    hasKey = true
+                                    val ok = SecureStore.saveApiKey(context, apiKey.trim())
+                                    keyError = !ok
+                                    if (ok) {
+                                        apiKey = ""
+                                        hasKey = true
+                                    }
+                                } else {
+                                    keyError = false
                                 }
+                                // Re-read rather than assuming: hasApiKey now
+                                // verifies the key can actually be decrypted.
+                                hasKey = SecureStore.hasApiKey(context)
                                 saved = true
                             }
                         },
@@ -988,14 +1055,32 @@ private fun SettingsScreen(
                     ) {
                         Icon(Icons.Filled.Security, contentDescription = null)
                         Spacer(Modifier.size(8.dp))
-                        Text(if (saved) "Settings saved locally" else "Save provider settings")
+                        Text(if (saved && !keyError) "Settings saved" else "Save provider settings")
                     }
                     Text(
-                        if (hasKey) "API key is stored on device, encrypted with a Keystore-backed key. It is never committed to Git or included in AI context as a field value."
-                        else "No API key saved yet. Without one, TaskPilot uses its built-in deterministic executor.",
+                        when {
+                            keyError -> "The key could not be stored securely on this device. Try again, or check that a screen lock is set."
+                            hasKey -> "API key is saved on this device, encrypted with a Keystore-backed key. It persists until you replace or clear it."
+                            else -> "No API key saved yet. TaskPilot needs an AI provider to handle your own commands."
+                        },
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = if (keyError) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    if (hasKey) {
+                        TextButton(
+                            onClick = {
+                                scope.launch {
+                                    SecureStore.clearApiKey(context)
+                                    hasKey = false
+                                    saved = false
+                                    keyError = false
+                                }
+                            }
+                        ) {
+                            Text("Remove stored key")
+                        }
+                    }
                 }
             }
         }

@@ -50,10 +50,26 @@ object CommandPlanner {
         "settings" to AppSpec("com.android.settings", "Settings"),
     )
 
-    fun parse(command: String): Plan {
+    /**
+     * @param aiAvailable when true, an AI provider is configured and will drive
+     * the run. Only commands that map cleanly onto a built-in routine are locked
+     * to that routine; everything else stays open-ended so the model can follow
+     * the user's actual wording instead of being forced down a keyword path.
+     */
+    fun parse(command: String, aiAvailable: Boolean = false): Plan {
         val trimmed = command.trim()
         val normalized = trimmed.lowercase()
         val match = appKeywords.entries.firstOrNull { normalized.contains(it.key) }
+
+        // With AI available, only take the deterministic route for the simple,
+        // unambiguous shapes it handles well. Anything longer or with extra
+        // clauses is better served by the model reading the live screen.
+        if (aiAvailable && match != null && !isSimpleRoutine(trimmed, match.key)) {
+            return aiPlan(trimmed, match.value.label)
+        }
+        if (aiAvailable && match == null) {
+            return aiPlan(trimmed, null)
+        }
 
         return when {
             match != null && match.key == "whatsapp" -> messagePlan(trimmed, match.value)
@@ -128,6 +144,39 @@ object CommandPlanner {
             PlanStep("Enable Battery Saver", "Change the setting after the approved plan."),
         )
         return Plan(command, steps, TaskIntent.Generic("battery-saver"))
+    }
+
+    /**
+     * True for short commands that are exactly "open X" or "open X and search Y"
+     * with no extra instructions layered on top.
+     */
+    private fun isSimpleRoutine(command: String, appKey: String): Boolean {
+        val n = command.lowercase().trim().trimEnd('.', '!')
+        if (n.length > 90) return false
+        // Extra clauses mean the user wants something the fixed routine cannot do.
+        val extraClauses = listOf(
+            " then ", " after ", " and then ", " scroll", " play ", " open the first",
+            " first result", " click ", " tap ", " subscribe", " like ", " comment",
+            " download", " share", " delete", " reply", " select ",
+        )
+        if (extraClauses.any { it in n }) return false
+        if (appKey == "whatsapp") return true
+        val hasQuery = extractQuery(command) != null
+        val verbs = Regex("""\b(open|launch|start|go to|search|find|look up|play|watch)\b""")
+        val verbCount = verbs.findAll(n).count()
+        return if (hasQuery) verbCount <= 2 else verbCount <= 1
+    }
+
+    /** Open-ended plan: the model decides each step from the live screen. */
+    private fun aiPlan(command: String, appLabel: String?): Plan {
+        val destination = appLabel?.let { "Open $it" } ?: "Identify the destination"
+        val steps = listOf(
+            PlanStep(destination, appLabel?.let { "Launch $it." } ?: "Work out which app or screen the request needs."),
+            PlanStep("Read the screen", "Build a redacted snapshot of what is on screen."),
+            PlanStep("Work through the task", "Decide and take one validated action at a time."),
+            PlanStep("Verify and finish", "Confirm the outcome, or ask before anything risky."),
+        )
+        return Plan(command, steps, TaskIntent.Generic(command))
     }
 
     private fun genericPlan(command: String): Plan {

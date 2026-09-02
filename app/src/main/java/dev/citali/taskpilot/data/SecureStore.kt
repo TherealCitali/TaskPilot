@@ -26,48 +26,79 @@ object SecureStore {
     private const val TRANSFORMATION = "AES/GCM/NoPadding"
     private const val TAG_SIZE_BITS = 128
 
-    fun hasApiKey(context: Context): Boolean = prefs(context).contains(KEY_CIPHER)
+    /**
+     * True only when a key is stored *and* still decryptable.
+     *
+     * Checking for the ciphertext alone was misleading: if the Keystore entry is
+     * lost the ciphertext survives, so the UI reported "key stored" while every
+     * read returned null and the agent silently ran offline.
+     */
+    fun hasApiKey(context: Context): Boolean = !getApiKey(context).isNullOrBlank()
 
-    fun saveApiKey(context: Context, value: String) {
+    /**
+     * Encrypts and stores the key. Returns true on success.
+     *
+     * Uses commit() rather than apply(): the caller shows a confirmation based on
+     * the result, so the write must have actually happened before we report it.
+     */
+    fun saveApiKey(context: Context, value: String): Boolean {
         val prefs = prefs(context)
         if (value.isBlank()) {
-            prefs.edit().remove(KEY_CIPHER).remove(KEY_IV).apply()
-            return
+            return prefs.edit().remove(KEY_CIPHER).remove(KEY_IV).commit()
         }
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, key())
-        val encrypted = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
-        prefs.edit()
-            .putString(KEY_CIPHER, Base64.encodeToString(encrypted, Base64.NO_WRAP))
-            .putString(KEY_IV, Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
-            .apply()
+        return runCatching {
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(Cipher.ENCRYPT_MODE, key())
+            val encrypted = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
+            val stored = prefs.edit()
+                .putString(KEY_CIPHER, Base64.encodeToString(encrypted, Base64.NO_WRAP))
+                .putString(KEY_IV, Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
+                .commit()
+            // Only report success if it can be read back.
+            stored && getApiKey(context) == value
+        }.getOrDefault(false)
     }
 
     fun getApiKey(context: Context): String? {
         val prefs = prefs(context)
         val cipherB64 = prefs.getString(KEY_CIPHER, null) ?: return null
         val ivB64 = prefs.getString(KEY_IV, null) ?: return null
-        return runCatching {
+        val decrypted = runCatching {
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(
                 Cipher.DECRYPT_MODE,
-                key(),
+                loadExistingKey() ?: return@runCatching null,
                 GCMParameterSpec(TAG_SIZE_BITS, Base64.decode(ivB64, Base64.NO_WRAP))
             )
             String(cipher.doFinal(Base64.decode(cipherB64, Base64.NO_WRAP)), Charsets.UTF_8)
         }.getOrNull()
+
+        if (decrypted.isNullOrBlank()) {
+            // The Keystore entry is gone or no longer matches this ciphertext
+            // (app data restored to a new device, Keystore reset, key rotated).
+            // Drop the unusable blob so the UI can honestly prompt for a new key
+            // instead of insisting one is saved.
+            prefs.edit().remove(KEY_CIPHER).remove(KEY_IV).apply()
+            return null
+        }
+        return decrypted
     }
 
     fun clearApiKey(context: Context) {
-        prefs(context).edit().remove(KEY_CIPHER).remove(KEY_IV).apply()
+        prefs(context).edit().remove(KEY_CIPHER).remove(KEY_IV).commit()
     }
 
     private fun prefs(context: Context) =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /** The existing Keystore entry, or null if it is missing. Never creates one. */
+    private fun loadExistingKey(): SecretKey? = runCatching {
+        val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+        keyStore.getKey(ALIAS, null) as? SecretKey
+    }.getOrNull()
 
     private fun key(): SecretKey {
-        val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-        (keyStore.getKey(ALIAS, null) as? SecretKey)?.let { return it }
+        loadExistingKey()?.let { return it }
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
         generator.init(
             KeyGenParameterSpec.Builder(
@@ -77,6 +108,7 @@ object SecureStore {
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                 .setKeySize(256)
+                .setUserAuthenticationRequired(false)
                 .build()
         )
         return generator.generateKey()
