@@ -182,7 +182,7 @@ class TaskPilotAccessibilityService : AccessibilityService() {
 
         // 1. The correct API: tell the IME to perform its editor action.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && focused != null) {
-            if (focused.performAction(AccessibilityNodeInfo.ACTION_IME_ENTER.id)) return true
+            if (focused.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)) return true
         }
 
         // 2. The soft keyboard's action key (labelled Search / Go / Enter / Done).
