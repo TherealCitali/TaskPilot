@@ -14,6 +14,8 @@ data class Plan(
     val command: String,
     val steps: List<PlanStep>,
     val intent: TaskIntent,
+    /** Ordered goals for a chained command; empty when the task has a single goal. */
+    val subGoals: List<String> = emptyList(),
 )
 
 sealed class TaskIntent {
@@ -59,7 +61,7 @@ object CommandPlanner {
     fun parse(command: String, aiAvailable: Boolean = false): Plan {
         val trimmed = command.trim()
         val normalized = trimmed.lowercase()
-        val match = appKeywords.entries.firstOrNull { normalized.contains(it.key) }
+        val match = matchApp(normalized)
 
         // With AI available, only take the deterministic route for the simple,
         // unambiguous shapes it handles well. Anything longer or with extra
@@ -147,6 +149,35 @@ object CommandPlanner {
     }
 
     /**
+     * Matches an app keyword on word boundaries.
+     *
+     * A bare `contains` matched any app name mentioned anywhere in the sentence,
+     * so "open brevent and enable Instagram lite from there" matched "instagram"
+     * and became "Open Instagram" -- dropping both the real target app and the
+     * actual goal. Preference is given to the app the user asked to open/launch.
+     */
+    private fun matchApp(normalized: String): Map.Entry<String, AppSpec>? {
+        fun mentioned(key: String): Boolean =
+            Regex("\\b" + Regex.escape(key) + "\\b").containsMatchIn(normalized)
+
+        val mentions = appKeywords.entries.filter { mentioned(it.key) }
+        if (mentions.isEmpty()) return null
+        // If several apps are named, the command spans more than one app and is
+        // not a single built-in routine; let the caller fall through to AI.
+        if (mentions.size > 1) return null
+
+        val entry = mentions.first()
+        // Only treat it as "the app to open" when it directly follows an open verb.
+        val opened = Regex(
+            "\\b(?:open|launch|start|go to|goto)\\s+(?:the\\s+)?" + Regex.escape(entry.key) + "\\b"
+        ).containsMatchIn(normalized)
+        val leadsCommand = normalized.startsWith(entry.key)
+        val onlySubject = Regex("\\b(?:in|on|from|using|with)\\s+" + Regex.escape(entry.key) + "\\b")
+            .containsMatchIn(normalized)
+        return if (opened || leadsCommand || onlySubject) entry else null
+    }
+
+    /**
      * True for short commands that are exactly "open X" or "open X and search Y"
      * with no extra instructions layered on top.
      */
@@ -160,6 +191,7 @@ object CommandPlanner {
             " download", " share", " delete", " reply", " select ",
         )
         if (extraClauses.any { it in n }) return false
+        if (hasMultipleSteps(n)) return false
         if (appKey == "whatsapp") return true
         val hasQuery = extractQuery(command) != null
         val verbs = Regex("""\b(open|launch|start|go to|search|find|look up|play|watch)\b""")
@@ -167,16 +199,70 @@ object CommandPlanner {
         return if (hasQuery) verbCount <= 2 else verbCount <= 1
     }
 
+    /**
+     * Detects a command that chains more than one goal, e.g.
+     * "open X and enable Y from there". These need the model to work through the
+     * screens in sequence; a fixed routine would silently do only the first part.
+     */
+    private fun hasMultipleSteps(normalized: String): Boolean {
+        val connectors = Regex(
+            """\b(?:and then|then|after that|afterwards|next,|;|,\s*then)\b"""
+        )
+        if (connectors.containsMatchIn(normalized)) return true
+
+        // "and <verb>" chains a second instruction ("open X and enable Y"),
+        // unlike "and" merely joining nouns ("open maps and search cafes" is
+        // handled as a single search routine by the query extractor).
+        val andVerb = Regex(
+            """\band\s+(?:also\s+)?(?:enable|disable|turn|switch|set|toggle|allow|block|""" +
+                """install|uninstall|update|clear|remove|delete|add|create|send|share|""" +
+                """download|copy|paste|change|select|choose|pick|tap|click|press|scroll|""" +
+                """navigate|go|open|launch)\b"""
+        )
+        if (andVerb.containsMatchIn(normalized)) return true
+
+        // A reference back to a previous screen implies a second stage.
+        if (Regex("""\bfrom (?:there|here|it|that)\b""").containsMatchIn(normalized)) return true
+        return false
+    }
+
     /** Open-ended plan: the model decides each step from the live screen. */
     private fun aiPlan(command: String, appLabel: String?): Plan {
-        val destination = appLabel?.let { "Open $it" } ?: "Identify the destination"
-        val steps = listOf(
-            PlanStep(destination, appLabel?.let { "Launch $it." } ?: "Work out which app or screen the request needs."),
-            PlanStep("Read the screen", "Build a redacted snapshot of what is on screen."),
-            PlanStep("Work through the task", "Decide and take one validated action at a time."),
-            PlanStep("Verify and finish", "Confirm the outcome, or ask before anything risky."),
+        val goals = splitGoals(command)
+        val steps = if (goals.size > 1) {
+            // Show the user each stage that was detected, so a chained command is
+            // visibly a chain before they approve it.
+            goals.mapIndexed { i, g ->
+                PlanStep("Step ${i + 1}: ${g.replaceFirstChar { c -> c.uppercase() }}", "Work through this stage on screen.")
+            } + PlanStep("Verify and finish", "Confirm every stage is done, or ask before anything risky.")
+        } else {
+            val destination = appLabel?.let { "Open $it" } ?: "Identify the destination"
+            listOf(
+                PlanStep(destination, appLabel?.let { "Launch $it." } ?: "Work out which app or screen the request needs."),
+                PlanStep("Read the screen", "Build a redacted snapshot of what is on screen."),
+                PlanStep("Work through the task", "Decide and take one validated action at a time."),
+                PlanStep("Verify and finish", "Confirm the outcome, or ask before anything risky."),
+            )
+        }
+        return Plan(command, steps, TaskIntent.Generic(command), if (goals.size > 1) goals else emptyList())
+    }
+
+    /**
+     * Splits a chained command into ordered goals so the model gets an explicit
+     * checklist instead of one long sentence it can declare done too early.
+     */
+    fun splitGoals(command: String): List<String> {
+        val text = command.trim().trimEnd('.', '!')
+        val separator = Regex(
+            """\s*(?:,\s*)?\b(?:and then|then|after that|afterwards)\b\s*|""" +
+                """\s*;\s*|""" +
+                """\s+and\s+(?=(?:also\s+)?(?:enable|disable|turn|switch|set|toggle|allow|block|""" +
+                """install|uninstall|update|clear|remove|delete|add|create|send|share|download|copy|""" +
+                """paste|change|select|choose|pick|tap|click|press|scroll|navigate|go|open|launch)\b)""",
+            RegexOption.IGNORE_CASE,
         )
-        return Plan(command, steps, TaskIntent.Generic(command))
+        val parts = text.split(separator).map { it.trim().trim(',') }.filter { it.length > 2 }
+        return if (parts.size > 1) parts else emptyList()
     }
 
     private fun genericPlan(command: String): Plan {

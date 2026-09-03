@@ -19,7 +19,10 @@ private val Context.settingsDataStore by preferencesDataStore(name = "taskpilot_
  */
 data class TaskPilotSettings(
     val endpointUrl: String = DEFAULT_ENDPOINT,
+    val apiPath: String = DEFAULT_API_PATH,
     val model: String = DEFAULT_MODEL,
+    /** Models tried in order when the primary model fails; one per line in the UI. */
+    val fallbackModels: List<String> = emptyList(),
     val highRiskConfirmations: Boolean = true,
     val redactSensitiveValues: Boolean = true,
     val pauseOnAmbiguity: Boolean = true,
@@ -27,14 +30,24 @@ data class TaskPilotSettings(
     val showValidation: Boolean = true,
     val showOverlay: Boolean = true,
 ) {
+    /** The primary model followed by any fallbacks, de-duplicated. */
+    val modelChain: List<String>
+        get() = (listOf(model) + fallbackModels)
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+
     companion object {
         const val DEFAULT_ENDPOINT = "https://api.openai.com/v1"
+        const val DEFAULT_API_PATH = "/chat/completions"
         const val DEFAULT_MODEL = "gpt-4o-mini"
     }
 }
 
 object SettingsStore {
     private val KEY_ENDPOINT = stringPreferencesKey("endpoint_url")
+    private val KEY_API_PATH = stringPreferencesKey("api_path")
+    private val KEY_FALLBACK_MODELS = stringPreferencesKey("fallback_models")
     private val KEY_MODEL = stringPreferencesKey("model")
     private val KEY_HIGH_RISK_CONFIRM = booleanPreferencesKey("high_risk_confirmations")
     private val KEY_REDACT = booleanPreferencesKey("redact_sensitive_values")
@@ -47,7 +60,12 @@ object SettingsStore {
         context.settingsDataStore.data.map { p ->
             TaskPilotSettings(
                 endpointUrl = p[KEY_ENDPOINT] ?: TaskPilotSettings.DEFAULT_ENDPOINT,
+                apiPath = p[KEY_API_PATH]?.takeIf { it.isNotBlank() } ?: TaskPilotSettings.DEFAULT_API_PATH,
                 model = p[KEY_MODEL] ?: TaskPilotSettings.DEFAULT_MODEL,
+                fallbackModels = (p[KEY_FALLBACK_MODELS] ?: "")
+                    .split('\n')
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() },
                 highRiskConfirmations = p[KEY_HIGH_RISK_CONFIRM] ?: true,
                 redactSensitiveValues = p[KEY_REDACT] ?: true,
                 pauseOnAmbiguity = p[KEY_PAUSE_AMBIGUITY] ?: true,
@@ -59,10 +77,21 @@ object SettingsStore {
 
     suspend fun snapshot(context: Context): TaskPilotSettings = settings(context).first()
 
-    suspend fun setProvider(context: Context, endpoint: String, model: String) {
+    suspend fun setProvider(
+        context: Context,
+        endpoint: String,
+        model: String,
+        apiPath: String = TaskPilotSettings.DEFAULT_API_PATH,
+        fallbackModels: List<String> = emptyList(),
+    ) {
         context.settingsDataStore.edit { p ->
             p[KEY_ENDPOINT] = endpoint.trim()
             p[KEY_MODEL] = model.trim()
+            p[KEY_API_PATH] = apiPath.trim().ifBlank { TaskPilotSettings.DEFAULT_API_PATH }
+            p[KEY_FALLBACK_MODELS] = fallbackModels
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .joinToString("\n")
         }
     }
 

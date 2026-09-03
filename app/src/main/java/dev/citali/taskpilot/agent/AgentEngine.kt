@@ -78,6 +78,7 @@ object AgentEngine {
 
     private var aiFailures = 0
     private var aiAnnounced = false
+    private var activeModel: String? = null
 
     private var pendingQuestion: CompletableDeferred<QuestionAnswer>? = null
 
@@ -88,6 +89,7 @@ object AgentEngine {
         paused = false
         aiFailures = 0
         aiAnnounced = false
+        activeModel = null
         pendingQuestion = null
         _state.value = EngineState(
             phase = Phase.RUNNING,
@@ -340,19 +342,50 @@ object AgentEngine {
             settings.model.isNotBlank()
 
         if (aiConfigured) {
+            val chain = settings.modelChain.ifEmpty { listOf(settings.model) }
             if (!aiAnnounced) {
                 aiAnnounced = true
-                log(LogLevel.INFO, "Asking ${settings.model} what to do next…")
+                log(LogLevel.INFO, "Asking ${chain.first()} what to do next…")
+                if (chain.size > 1) {
+                    log(LogLevel.INFO, "Fallback models: ${chain.drop(1).joinToString(", ")}")
+                }
             }
-            val result = LlmClient.complete(
-                settings.endpointUrl,
-                settings.model,
-                apiKey!!,
-                listOf(
-                    LlmClient.systemPrompt(),
-                    LlmClient.userPrompt(plan.command, plan.steps, snapshot.toPromptString(), recent),
+            val messages = listOf(
+                LlmClient.systemPrompt(),
+                LlmClient.userPrompt(
+                    plan.command,
+                    plan.steps,
+                    snapshot.toPromptString(),
+                    recent,
+                    plan.subGoals,
                 ),
             )
+            // Try each model in order; a model that is rate-limited, unavailable,
+            // or unknown to the provider should not end the run when the user has
+            // named alternatives.
+            var result: Result<String> = Result.failure(IllegalStateException("No model configured"))
+            for ((index, candidate) in chain.withIndex()) {
+                result = LlmClient.complete(
+                    settings.endpointUrl,
+                    candidate,
+                    apiKey!!,
+                    messages,
+                    settings.apiPath,
+                )
+                if (result.isSuccess) {
+                    if (candidate != activeModel) {
+                        activeModel = candidate
+                        if (index > 0) log(LogLevel.INFO, "Using fallback model: $candidate")
+                    }
+                    break
+                }
+                if (index < chain.lastIndex) {
+                    log(
+                        LogLevel.WARN,
+                        "$candidate failed (${result.exceptionOrNull()?.message?.take(90)}); trying ${chain[index + 1]}."
+                    )
+                }
+            }
             result.onSuccess { raw ->
                 val snippet = raw.trim().replace('\n', ' ').take(160)
                 log(LogLevel.MODEL, "Model: $snippet")
