@@ -1049,7 +1049,11 @@ private fun SettingsScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var endpoint by remember(settings.endpointUrl) { mutableStateOf(settings.endpointUrl) }
+    var apiPath by remember(settings.apiPath) { mutableStateOf(settings.apiPath) }
     var model by remember(settings.model) { mutableStateOf(settings.model) }
+    var fallbacks by remember(settings.fallbackModels) {
+        mutableStateOf(settings.fallbackModels.joinToString("\n"))
+    }
     var apiKey by remember { mutableStateOf("") }
     var hasKey by remember { mutableStateOf(SecureStore.hasApiKey(context)) }
     var saved by remember { mutableStateOf(false) }
@@ -1071,6 +1075,16 @@ private fun SettingsScreen(
                         onValueChange = { endpoint = it; saved = false },
                         modifier = Modifier.fillMaxWidth(),
                         label = { Text("API base URL") },
+                        placeholder = { Text("https://openrouter.ai/api/v1") },
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = apiPath,
+                        onValueChange = { apiPath = it; saved = false },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("API path") },
+                        placeholder = { Text(TaskPilotSettings.DEFAULT_API_PATH) },
+                        supportingText = { Text("Appended to the base URL. Leave as /chat/completions for most providers.") },
                         singleLine = true
                     )
                     OutlinedTextField(
@@ -1078,7 +1092,20 @@ private fun SettingsScreen(
                         onValueChange = { model = it; saved = false },
                         modifier = Modifier.fillMaxWidth(),
                         label = { Text("Model") },
+                        placeholder = { Text("openai/gpt-4o-mini") },
                         singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = fallbacks,
+                        onValueChange = { fallbacks = it; saved = false },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Fallback models (one per line)") },
+                        placeholder = { Text("anthropic/claude-3.5-sonnet\ngoogle/gemini-flash-1.5") },
+                        supportingText = {
+                            Text("Tried in order if the model above fails, is rate-limited, or is unavailable.")
+                        },
+                        minLines = 2,
+                        maxLines = 5
                     )
                     OutlinedTextField(
                         value = apiKey,
@@ -1093,7 +1120,13 @@ private fun SettingsScreen(
                     Button(
                         onClick = {
                             scope.launch {
-                                SettingsStore.setProvider(context, endpoint, model)
+                                SettingsStore.setProvider(
+                                    context,
+                                    endpoint,
+                                    model,
+                                    apiPath,
+                                    fallbacks.split('\n'),
+                                )
                                 if (apiKey.isNotBlank()) {
                                     val ok = SecureStore.saveApiKey(context, apiKey.trim())
                                     keyError = !ok

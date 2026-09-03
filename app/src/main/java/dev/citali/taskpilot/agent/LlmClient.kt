@@ -25,9 +25,12 @@ object LlmClient {
         model: String,
         apiKey: String,
         messages: List<ChatMessage>,
+        apiPath: String = "/chat/completions",
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            val url = URL(endpoint.trimEnd('/') + "/chat/completions")
+            val path = apiPath.trim().ifBlank { "/chat/completions" }
+                .let { if (it.startsWith("/")) it else "/$it" }
+            val url = URL(endpoint.trimEnd('/') + path)
             val connection = url.openConnection() as HttpURLConnection
             try {
                 connection.requestMethod = "POST"
@@ -36,6 +39,9 @@ object LlmClient {
                 connection.doOutput = true
                 connection.setRequestProperty("Content-Type", "application/json")
                 connection.setRequestProperty("Authorization", "Bearer $apiKey")
+                // OpenRouter attributes traffic with these; harmless elsewhere.
+                connection.setRequestProperty("HTTP-Referer", "https://github.com/TherealCitali/TaskPilot")
+                connection.setRequestProperty("X-Title", "TaskPilot")
 
                 val body = JSONObject()
                     .put("model", model)
@@ -147,18 +153,43 @@ object LlmClient {
             - For destructive or externally-visible controls (send, delete, buy, pay, uninstall,
               grant), only proceed if the user's plan explicitly requires it; otherwise ask.
             - If the screen does not match expectations, ask instead of guessing.
-            - If the task appears complete, respond with "complete".
             - Never exceed one action per reply.
+
+            Multi-step tasks:
+            - A task may chain several goals ("open X and enable Y from there").
+              Work through them in order and keep going after each one finishes.
+            - Only reply "complete" when EVERY part of the task is done. Finishing
+              the first stage is not the end of the task.
+            - The REMAINING CHECKLIST below tracks what is still outstanding. If any
+              item is unfinished, choose the next action for it rather than
+              completing.
+            - App names in the task may not match the launcher label exactly. If the
+              named app is not installed or cannot be found, say so with "fail"
+              rather than substituting a different app.
         """.trimIndent()
     )
 
-    fun userPrompt(task: String, planSteps: List<PlanStep>, tree: String, recent: List<String>): ChatMessage {
+    fun userPrompt(
+        task: String,
+        planSteps: List<PlanStep>,
+        tree: String,
+        recent: List<String>,
+        subGoals: List<String> = emptyList(),
+    ): ChatMessage {
         val steps = planSteps.joinToString("\n") { "- ${it.title}: ${it.detail}" }
         val recentLines = if (recent.isEmpty()) "(none yet)" else recent.takeLast(12).joinToString("\n")
+        val checklist = if (subGoals.isEmpty()) {
+            "(single goal -- finish the task as written)"
+        } else {
+            subGoals.mapIndexed { i, g -> "${i + 1}. $g" }.joinToString("\n")
+        }
         return ChatMessage(
             role = "user",
             content = """
                 TASK: $task
+
+                REMAINING CHECKLIST (every item must be done before "complete"):
+                $checklist
 
                 APPROVED PLAN:
                 $steps
