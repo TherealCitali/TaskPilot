@@ -77,6 +77,7 @@ object AgentEngine {
     private var paused = false
 
     private var aiFailures = 0
+    private var aiAnnounced = false
 
     private var pendingQuestion: CompletableDeferred<QuestionAnswer>? = null
 
@@ -86,6 +87,7 @@ object AgentEngine {
         if (isActive()) cancelJob()
         paused = false
         aiFailures = 0
+        aiAnnounced = false
         pendingQuestion = null
         _state.value = EngineState(
             phase = Phase.RUNNING,
@@ -98,6 +100,12 @@ object AgentEngine {
             log(LogLevel.INFO, "• ${step.title}" + if (step.highRisk) "  [high-risk]" else "")
         }
         job = scope.launch { runLoop(context.applicationContext, plan) }
+    }
+
+    /** Clears a finished run so the UI returns to its idle state. */
+    fun reset() {
+        if (isActive()) return
+        _state.value = EngineState(serviceConnected = TaskPilotAccessibilityService.isConnected())
     }
 
     fun stop() {
@@ -332,6 +340,10 @@ object AgentEngine {
             settings.model.isNotBlank()
 
         if (aiConfigured) {
+            if (!aiAnnounced) {
+                aiAnnounced = true
+                log(LogLevel.INFO, "Asking ${settings.model} what to do next…")
+            }
             val result = LlmClient.complete(
                 settings.endpointUrl,
                 settings.model,

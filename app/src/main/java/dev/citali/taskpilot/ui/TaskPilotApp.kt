@@ -255,6 +255,7 @@ fun TaskPilotApp() {
                     onPause = { AgentEngine.pause() },
                     onResume = { AgentEngine.resume() },
                     onStop = { AgentEngine.stop() },
+                    onDismissOutcome = { AgentEngine.reset() },
                 )
                 Destination.HISTORY -> HistoryScreen(entries = history)
                 Destination.SETTINGS -> when (settingsPage) {
@@ -294,6 +295,7 @@ private fun HomeScreen(
     onPause: () -> Unit,
     onResume: () -> Unit,
     onStop: () -> Unit,
+    onDismissOutcome: () -> Unit,
 ) {
     val examples = listOf(
         "Open YouTube and search for Minecraft tutorials.",
@@ -327,6 +329,15 @@ private fun HomeScreen(
                 enabled = serviceEnabled && !isRunning
             )
         }
+        // The log must survive a finished run. Previously it was gated on
+        // isRunning, so COMPLETED/FAILED/BLOCKED wiped the card the instant the
+        // task ended and the screen looked like nothing had happened at all.
+        val hasOutcome = engineState.phase in setOf(
+            AgentEngine.Phase.COMPLETED,
+            AgentEngine.Phase.FAILED,
+            AgentEngine.Phase.BLOCKED,
+            AgentEngine.Phase.STOPPED,
+        )
         if (isRunning) {
             item {
                 RunningTaskCard(
@@ -336,6 +347,10 @@ private fun HomeScreen(
                     onStop = onStop,
                 )
             }
+        } else if (hasOutcome) {
+            item { TaskOutcomeCard(engineState = engineState, onDismiss = onDismissOutcome) }
+        }
+        if (isRunning || hasOutcome) {
             item { LiveLogCard(engineState) }
         }
         item {
@@ -625,6 +640,50 @@ private fun RunningTaskCard(
                     Text("Stop")
                 }
             }
+        }
+    }
+}
+
+/**
+ * Terminal-state summary. A finished run has to stay on screen with its reason,
+ * otherwise a task that stopped immediately is indistinguishable from one that
+ * never started.
+ */
+@Composable
+private fun TaskOutcomeCard(engineState: AgentEngine.EngineState, onDismiss: () -> Unit) {
+    val failed = engineState.phase in setOf(
+        AgentEngine.Phase.FAILED,
+        AgentEngine.Phase.BLOCKED,
+    )
+    ElevatedCard(
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = if (failed) {
+                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.6f)
+            } else {
+                MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f)
+            }
+        ),
+        shape = MaterialTheme.shapes.large
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(
+                    if (failed) Icons.Outlined.WarningAmber else Icons.Filled.CheckCircle,
+                    contentDescription = null
+                )
+                Text(
+                    when (engineState.phase) {
+                        AgentEngine.Phase.COMPLETED -> "Task complete"
+                        AgentEngine.Phase.FAILED -> "Task failed"
+                        AgentEngine.Phase.BLOCKED -> "Task blocked"
+                        else -> "Task stopped"
+                    },
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            Text(engineState.statusText, style = MaterialTheme.typography.bodyMedium)
+            TextButton(onClick = onDismiss) { Text("Dismiss") }
         }
     }
 }
