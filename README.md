@@ -39,7 +39,9 @@ TaskPilot is a native Android AI assistant for everyday, user-approved automatio
 
 The app is inspired by the focused, dark utility feel of InstallerX Revived and the presentation style of LunarTune, while keeping its own Android-native Material 3 Expressive identity.
 
-> **Project status:** Shipping. The UI, accessibility service, redaction engine, safety policy, Keystore-encrypted API-key storage, floating Stop overlay, deterministic action runner, and OpenAI-compatible client are all wired together. TaskPilot can run plan-approved tasks through its built-in executor with no API key, and the AI path activates automatically once a provider is configured in Settings.
+> **Project status:** Shipping. The UI, accessibility service, redaction engine, safety policy, Keystore-encrypted API-key storage, floating Stop overlay, deterministic action runner, and OpenAI-compatible client are all wired together.
+>
+> TaskPilot is AI-first: add an OpenAI-compatible provider in Settings and it will follow your own instructions, reading the live screen and deciding one action at a time. Without a key it falls back to a small set of built-in routines (open an app, open-and-search, draft a message) — enough to try the examples, but it will tell you up front when a task needs a provider rather than failing quietly.
 
 ## ✦ Example commands
 
