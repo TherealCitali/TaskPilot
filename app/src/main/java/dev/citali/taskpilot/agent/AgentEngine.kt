@@ -2,6 +2,7 @@ package dev.citali.taskpilot.agent
 
 import android.content.Context
 import dev.citali.taskpilot.accessibility.TaskPilotAccessibilityService
+import dev.citali.taskpilot.data.AppInventory
 import dev.citali.taskpilot.data.HistoryStore
 import dev.citali.taskpilot.data.SecureStore
 import dev.citali.taskpilot.data.SettingsStore
@@ -214,6 +215,18 @@ object AgentEngine {
                     else -> Unit
                 }
 
+                // Resolve app targets against the real installed-app list. A model
+                // can hallucinate a package name; launching it would just fail
+                // silently, so correct it here or stop with a clear reason.
+                val resolved = resolveAppAction(context, action)
+                if (resolved is Action.Fail) {
+                    log(LogLevel.ERROR, resolved.reason)
+                    finish(Phase.FAILED, resolved.reason)
+                    record(context, plan.command, "failed")
+                    return
+                }
+                @Suppress("NAME_SHADOWING") val action = resolved
+
                 // Validate against the safety policy before executing.
                 val targetDescription = action.nodeTarget?.let { service.describeNode(it) }
                 val decision = SafetyPolicy.assess(action, targetDescription)
@@ -358,6 +371,7 @@ object AgentEngine {
                     snapshot.toPromptString(),
                     recent,
                     plan.subGoals,
+                    AppInventory.promptListing(context),
                 ),
             )
             // Try each model in order; a model that is rate-limited, unavailable,
@@ -436,6 +450,38 @@ object AgentEngine {
             statusText = "Waiting for your decision",
         )
         return deferred.await()
+    }
+
+    /**
+     * Checks an [Action.OpenApp] against the device's real package list.
+     *
+     * Models guess package names when they do not know one -- "dev.citali.brevent"
+     * was derived from TaskPilot's own application id. If the stated package is
+     * not installed, try to resolve it from the label instead, and only then give
+     * up with an explanation.
+     */
+    private fun resolveAppAction(context: Context, action: Action): Action {
+        if (action !is Action.OpenApp) return action
+        val byPackage = AppInventory.all(context)
+            .firstOrNull { it.packageName.equals(action.packageName, ignoreCase = true) }
+        val app = byPackage
+            ?: AppInventory.resolve(context, action.label.ifBlank { action.packageName })
+            ?: AppInventory.resolve(context, action.packageName.substringAfterLast('.'))
+
+        if (app == null) {
+            val name = action.label.ifBlank { action.packageName }
+            return Action.Fail("\"$name\" is not installed on this device.")
+        }
+        if (!app.enabled) {
+            return Action.Fail(
+                "${app.label} (${app.packageName}) is disabled, so it cannot be opened. " +
+                    "Enable it in Android Settings and run the task again."
+            )
+        }
+        if (!app.packageName.equals(action.packageName, ignoreCase = true)) {
+            log(LogLevel.WARN, "Corrected package: ${action.packageName} -> ${app.packageName}")
+        }
+        return Action.OpenApp(app.packageName, app.label)
     }
 
     private fun describeAction(action: Action): String = when (action) {

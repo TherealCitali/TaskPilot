@@ -58,10 +58,22 @@ object CommandPlanner {
      * to that routine; everything else stays open-ended so the model can follow
      * the user's actual wording instead of being forced down a keyword path.
      */
-    fun parse(command: String, aiAvailable: Boolean = false): Plan {
+    fun parse(
+        command: String,
+        aiAvailable: Boolean = false,
+        resolveApp: (String) -> AppSpec? = { null },
+    ): Plan {
         val trimmed = command.trim()
         val normalized = trimmed.lowercase()
         val match = matchApp(normalized)
+
+        // Prefer what is actually installed over the built-in keyword table: the
+        // table's package names are guesses that vary by OEM and region, and it
+        // cannot know about apps like Brevent at all.
+        val installed = match?.let { resolveApp(it.key) }
+        if (installed != null && aiAvailable && isSimpleRoutine(trimmed, match.key)) {
+            return buildRoutine(trimmed, match.key, installed)
+        }
 
         // With AI available, only take the deterministic route for the simple,
         // unambiguous shapes it handles well. Anything longer or with extra
@@ -73,15 +85,23 @@ object CommandPlanner {
             return aiPlan(trimmed, null)
         }
 
+        val spec = installed ?: match?.value
         return when {
-            match != null && match.key == "whatsapp" -> messagePlan(trimmed, match.value)
-            match != null && extractQuery(trimmed) != null -> searchPlan(trimmed, match.value)
-            match != null -> openPlan(trimmed, match.value)
+            match != null && match.key == "whatsapp" -> messagePlan(trimmed, spec!!)
+            match != null && extractQuery(trimmed) != null -> searchPlan(trimmed, spec!!)
+            match != null -> openPlan(trimmed, spec!!)
             "delete" in normalized && ("screenshot" in normalized || "photo" in normalized || "image" in normalized || "gallery" in normalized) ->
                 deletePlan(trimmed)
             "battery saver" in normalized -> batteryPlan(trimmed)
             else -> genericPlan(trimmed)
         }
+    }
+
+    /** Routes a simple command to the right built-in routine for a known app. */
+    private fun buildRoutine(command: String, appKey: String, spec: AppSpec): Plan = when {
+        appKey == "whatsapp" -> messagePlan(command, spec)
+        extractQuery(command) != null -> searchPlan(command, spec)
+        else -> openPlan(command, spec)
     }
 
     private fun openPlan(command: String, spec: AppSpec): Plan {
