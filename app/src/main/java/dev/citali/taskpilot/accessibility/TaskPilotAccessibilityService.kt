@@ -15,6 +15,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import dev.citali.taskpilot.agent.Action
 import dev.citali.taskpilot.agent.AgentEngine
+import dev.citali.taskpilot.overlay.QuestionOverlay
 import dev.citali.taskpilot.overlay.TaskPilotOverlay
 import java.util.Locale
 
@@ -37,6 +38,7 @@ class TaskPilotAccessibilityService : AccessibilityService() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var overlay: TaskPilotOverlay? = null
+    private var questionOverlay: QuestionOverlay? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -60,11 +62,13 @@ class TaskPilotAccessibilityService : AccessibilityService() {
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        hideQuestionOverlay()
         hideOverlay()
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
+        hideQuestionOverlay()
         hideOverlay()
         if (instance === this) instance = null
         AgentEngine.onServiceConnected(false)
@@ -275,6 +279,17 @@ class TaskPilotAccessibilityService : AccessibilityService() {
     fun hideOverlay() = onMain {
         overlay?.hide()
         overlay = null
+    }
+
+    /** Floating question, so a prompt is reachable from any foreground app. */
+    fun showQuestionOverlay(question: dev.citali.taskpilot.agent.AgentEngine.Question) = onMain {
+        if (questionOverlay == null) questionOverlay = QuestionOverlay(this)
+        questionOverlay?.show(question)
+    }
+
+    fun hideQuestionOverlay() = onMain {
+        questionOverlay?.hide()
+        questionOverlay = null
     }
 
     private inline fun onMain(crossinline block: () -> Unit) {

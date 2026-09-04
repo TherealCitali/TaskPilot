@@ -81,7 +81,16 @@ class TaskPilotOverlay(private val service: AccessibilityService) :
 
     fun show(statusText: String) {
         statusState.value = statusText
-        if (view != null) return
+
+        // Only skip re-adding when the window is genuinely still attached.
+        // Checking `view != null` alone was not enough: the system can detach
+        // the overlay (service rebind, display change, OEM window cleanup) while
+        // the reference stays non-null, and the pill would never come back.
+        view?.let { existing ->
+            if (existing.isAttachedToWindow) return
+            runCatching { windowManager.removeView(existing) }
+            view = null
+        }
 
         lifecycleRegistry.currentState = Lifecycle.State.CREATED
 
