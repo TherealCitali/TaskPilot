@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.AccessibilityNew
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.ChevronRight
@@ -105,10 +106,12 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.citali.taskpilot.R
 import dev.citali.taskpilot.accessibility.TaskPilotAccessibilityService
 import dev.citali.taskpilot.agent.AgentEngine
+import dev.citali.taskpilot.agent.AppSpec
 import dev.citali.taskpilot.agent.CommandPlanner
 import dev.citali.taskpilot.agent.Plan
 import dev.citali.taskpilot.agent.PlanStep
 import dev.citali.taskpilot.data.HistoryEntry
+import dev.citali.taskpilot.data.AppInventory
 import dev.citali.taskpilot.data.HistoryStore
 import dev.citali.taskpilot.data.SecureStore
 import dev.citali.taskpilot.data.SettingsStore
@@ -132,6 +135,7 @@ private enum class SettingsPage(
     ROOT("Settings"),
     SAFETY("Safety and permissions"),
     DEVELOPER("Developer options"),
+    APPS("Installed apps"),
     ABOUT("About and diagnostics")
 }
 
@@ -246,7 +250,10 @@ fun TaskPilotApp() {
                         val text = command.trim()
                         if (text.isNotBlank()) {
                             aiAvailable = SecureStore.hasApiKey(context)
-                            pendingPlan = CommandPlanner.parse(text, aiAvailable)
+                            pendingPlan = CommandPlanner.parse(text, aiAvailable) { key ->
+                                AppInventory.resolve(context, key)
+                                    ?.let { app -> AppSpec(app.packageName, app.label) }
+                            }
                         }
                     },
                     onOpenAccessibility = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
@@ -264,6 +271,7 @@ fun TaskPilotApp() {
                         onOpenAccessibility = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
                         onOpenSafety = { settingsPageIndex = SettingsPage.SAFETY.ordinal },
                         onOpenDeveloper = { settingsPageIndex = SettingsPage.DEVELOPER.ordinal },
+                        onOpenApps = { settingsPageIndex = SettingsPage.APPS.ordinal },
                         onOpenAbout = { settingsPageIndex = SettingsPage.ABOUT.ordinal },
                     )
                     SettingsPage.SAFETY -> SafetySettingsScreen(settings = settings)
@@ -271,6 +279,7 @@ fun TaskPilotApp() {
                         settings = settings,
                         serviceEnabled = serviceEnabled,
                     )
+                    SettingsPage.APPS -> InstalledAppsScreen()
                     SettingsPage.ABOUT -> AboutDiagnosticsScreen(serviceEnabled = serviceEnabled)
                 }
             }
@@ -1044,6 +1053,7 @@ private fun SettingsScreen(
     onOpenAccessibility: () -> Unit,
     onOpenSafety: () -> Unit,
     onOpenDeveloper: () -> Unit,
+    onOpenApps: () -> Unit,
     onOpenAbout: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -1201,6 +1211,15 @@ private fun SettingsScreen(
                 subtitle = "Open redacted tree summaries, overlay status, and action validation results.",
                 action = "Open",
                 onClick = onOpenDeveloper
+            )
+        }
+        item {
+            SettingsActionCard(
+                icon = Icons.Outlined.Apps,
+                title = "Installed apps",
+                subtitle = "What TaskPilot can see, with real package names and enabled state.",
+                action = "View",
+                onClick = onOpenApps
             )
         }
         item {
@@ -1368,6 +1387,99 @@ private fun DeveloperSettingsScreen(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * The device's real app list. Makes package resolution inspectable, so a wrong
+ * or missing app is visible here rather than only as a failed task.
+ */
+@Composable
+private fun InstalledAppsScreen() {
+    val context = LocalContext.current
+    var query by rememberSaveable { mutableStateOf("") }
+    var reloadKey by remember { mutableIntStateOf(0) }
+    val apps by remember(reloadKey) {
+        mutableStateOf(AppInventory.userVisible(context, refresh = reloadKey > 0))
+    }
+    val filtered = remember(apps, query) {
+        val q = query.trim().lowercase()
+        if (q.isBlank()) apps
+        else apps.filter {
+            it.label.lowercase().contains(q) || it.packageName.lowercase().contains(q)
+        }
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            SectionHeading(
+                "Installed apps",
+                "${apps.size} visible. The agent may only use these exact package names."
+            )
+        }
+        item {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Search apps") },
+                singleLine = true
+            )
+        }
+        if (apps.isEmpty()) {
+            item {
+                ElevatedCard(
+                    colors = CardDefaults.elevatedCardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.6f)
+                    ),
+                    shape = MaterialTheme.shapes.large
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("No apps visible", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "Android is hiding the package list from TaskPilot. Reinstall the latest build, " +
+                                "or allow it to query installed apps.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+        }
+        items(filtered) { app ->
+            ElevatedCard(
+                colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = MaterialTheme.shapes.medium
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            app.label,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            app.state,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (app.enabled) MaterialTheme.colorScheme.secondary
+                            else MaterialTheme.colorScheme.error
+                        )
+                    }
+                    Text(
+                        app.packageName,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+        item {
+            TextButton(onClick = { AppInventory.invalidate(); reloadKey++ }) { Text("Refresh list") }
         }
     }
 }

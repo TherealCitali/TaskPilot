@@ -163,9 +163,13 @@ object LlmClient {
             - The REMAINING CHECKLIST below tracks what is still outstanding. If any
               item is unfinished, choose the next action for it rather than
               completing.
-            - App names in the task may not match the launcher label exactly. If the
-              named app is not installed or cannot be found, say so with "fail"
-              rather than substituting a different app.
+            - Use ONLY package names from the INSTALLED APPS list below. Never guess
+              or construct a package name. If the app the task names is not in that
+              list, reply "fail" and say it is not installed -- do not substitute a
+              different app.
+            - If the target app is marked (disabled) it cannot be launched directly.
+              Say so with "fail", or ask the user, rather than repeatedly trying to
+              open it.
         """.trimIndent()
     )
 
@@ -175,6 +179,7 @@ object LlmClient {
         tree: String,
         recent: List<String>,
         subGoals: List<String> = emptyList(),
+        installedApps: String = "",
     ): ChatMessage {
         val steps = planSteps.joinToString("\n") { "- ${it.title}: ${it.detail}" }
         val recentLines = if (recent.isEmpty()) "(none yet)" else recent.takeLast(12).joinToString("\n")
@@ -190,6 +195,9 @@ object LlmClient {
 
                 REMAINING CHECKLIST (every item must be done before "complete"):
                 $checklist
+
+                INSTALLED APPS (use these exact package names):
+                ${installedApps.ifBlank { "(unavailable)" }}
 
                 APPROVED PLAN:
                 $steps
