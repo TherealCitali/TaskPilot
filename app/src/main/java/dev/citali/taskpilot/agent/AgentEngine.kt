@@ -173,6 +173,11 @@ object AgentEngine {
         try {
             while (coroutineContext.isActive) {
                 while (paused && coroutineContext.isActive) {
+                    // Keep the pill up while paused, otherwise the only Stop
+                    // control disappears exactly when the user wants it.
+                    if (settings.showOverlay) {
+                        TaskPilotAccessibilityService.instance?.showOverlay("Paused")
+                    }
                     delay(250)
                 }
 
@@ -321,7 +326,10 @@ object AgentEngine {
                 }
 
                 if (settings.showOverlay) {
-                    service.updateOverlay(shortStatus(action))
+                    // show() is idempotent and re-adds the window if the system
+                    // tore it down (service rebind, config change, OEM cleanup).
+                    // A single show() at start-up silently vanished mid-task.
+                    service.showOverlay(shortStatus(action))
                 }
                 delay(850)
             }
@@ -444,7 +452,14 @@ object AgentEngine {
             question = question,
             statusText = "Waiting for your decision",
         )
-        return deferred.await()
+        // Ask through the overlay so the question is reachable from whatever app
+        // is in the foreground, not only from inside TaskPilot.
+        TaskPilotAccessibilityService.instance?.showQuestionOverlay(question)
+        try {
+            return deferred.await()
+        } finally {
+            TaskPilotAccessibilityService.instance?.hideQuestionOverlay()
+        }
     }
 
     /**

@@ -166,8 +166,12 @@ fun TaskPilotApp() {
     }
 
     // Engine-driven question (high-risk confirmation or open question).
+    //
+    // The same question is also shown as a floating overlay so it is reachable
+    // from other apps. Only render the in-app dialog when that overlay is not
+    // up, otherwise the user sees the prompt twice.
     val question = engineState.question
-    if (question != null) {
+    if (question != null && !TaskPilotAccessibilityService.isConnected()) {
         QuestionDialog(
             question = question,
             onApprove = { text -> AgentEngine.answer(true, text) },
