@@ -54,7 +54,11 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 is what makes this app small: almost all of the dex is Compose
+            // + material-icons-extended, and the icon library only shrinks when
+            // unused icons can be tree-shaken.
+            isMinifyEnabled = true
+            isShrinkResources = true
             if (hasTaskPilotSigning) {
                 signingConfig = signingConfigs.getByName("taskPilotRelease")
             }
