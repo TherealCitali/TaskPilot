@@ -197,7 +197,14 @@ object AgentEngine {
                     )
                 }
 
-                val action = nextAction(context, settings, plan, snapshot, recent, deterministic)
+                // Resolve app targets against the real installed-app list before
+                // anything else looks at the action. A model can hallucinate a
+                // package name; launching it would just fail silently, so correct
+                // it here or turn it into a Fail with a clear reason.
+                val action = resolveAppAction(
+                    context,
+                    nextAction(context, settings, plan, snapshot, recent, deterministic),
+                )
 
                 when (action) {
                     is Action.Complete -> {
@@ -214,18 +221,6 @@ object AgentEngine {
                     }
                     else -> Unit
                 }
-
-                // Resolve app targets against the real installed-app list. A model
-                // can hallucinate a package name; launching it would just fail
-                // silently, so correct it here or stop with a clear reason.
-                val resolved = resolveAppAction(context, action)
-                if (resolved is Action.Fail) {
-                    log(LogLevel.ERROR, resolved.reason)
-                    finish(Phase.FAILED, resolved.reason)
-                    record(context, plan.command, "failed")
-                    return
-                }
-                @Suppress("NAME_SHADOWING") val action = resolved
 
                 // Validate against the safety policy before executing.
                 val targetDescription = action.nodeTarget?.let { service.describeNode(it) }
